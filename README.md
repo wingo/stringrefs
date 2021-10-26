@@ -236,10 +236,13 @@ encoding ::= utf-8 | utf-16 | one-byte
 ```
 
 When reading or writing encoded bytes, the address in memory at which to
-write the bytes depends on the memory model of the WebAssembly module.
+read or write the bytes depends on the memory model of the WebAssembly
+module.
 ```
 address ::= i32 | i64
 ```
+Such instructions also take the memory to which to read or write as an
+immediate.
 
 ### Creating strings
 
@@ -253,6 +256,8 @@ alignment for both operands and will trap otherwise.  Attempting to
 create a string with bytes that are not valid for the encoding will
 trap.  No terminating `NUL` byte is expected.
 
+### String literals
+
 ```
 (string.const contents:i32)
   -> str:stringref
@@ -261,10 +266,14 @@ Create a new string from the literal string *`contents`*, as in
 `(string.const "Hello, World!")`.  This instruction is constant and can
 be used in global variable initializers.
 
-The literal is encoded as an `i32` offset into a new custom section: a
-string table, encoded as a contiguous array of bytes that is a valid
-sequence of NUL-terminated UTF-8 strings.  The string table section must
-immediately precede the global section.
+#### String literal section
+
+The `string.const` section indicates the literal as an `i32` index into
+a new custom section: a string table, encoded as a `vec(vec(u8))` of
+valid UTF-8 strings.  Because literal strings can contain codepoint 0,
+strings in the string table have no NUL.  The string table section must
+immediately precede the global section, or where the global section
+would be, in the binary.
 
 ### String cursors
 
