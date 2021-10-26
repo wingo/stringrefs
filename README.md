@@ -271,7 +271,7 @@ be used in global variable initializers.
 The `string.const` section indicates the literal as an `i32` index into
 a new custom section: a string table, encoded as a `vec(vec(u8))` of
 valid UTF-8 strings.  Because literal strings can contain codepoint 0,
-strings in the string table have no NUL.  The string table section must
+strings in the string table do not use NUL as a terminator. The string table section must
 immediately precede the global section, or where the global section
 would be, in the binary.
 
