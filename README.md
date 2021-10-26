@@ -371,10 +371,13 @@ Return 0 otherwise.
 
 ## Examples
 
+We assume that the textual syntax for `string.encode` and `string.new`
+allow you to elide the memory, in which case it defaults to 0.
+
 ### Make string from NUL-terminated UTF-8 in memory
 
 ```wasm
-(func $string-from-utf8 (param $ptr i32) (result $stringref)
+(func $string-from-utf8 (param $ptr i32) (result stringref)
   local.get $ptr
   local.get $ptr
   call $strlen
@@ -384,7 +387,7 @@ Return 0 otherwise.
 ### Make string from one-byte codepoints in memory
 
 ```wasm
-(func $string-from-latin1 (param $ptr i32) (param $len i32) (result $stringref)
+(func $string-from-latin1 (param $ptr i32) (param $len i32) (result stringref)
   local.get $ptr
   local.get $len
   string.new one-byte)
@@ -393,7 +396,7 @@ Return 0 otherwise.
 ### Make string from UTF-16 in memory
 
 ```wasm
-(func $string-from-utf16 (param $ptr i32) (param $units i32) (result $stringref)
+(func $string-from-utf16 (param $ptr i32) (param $units i32) (result stringref)
   local.get $ptr
   local.get $units
   i32.const 1
