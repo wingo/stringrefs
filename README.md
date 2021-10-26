@@ -224,23 +224,27 @@ includes the following procedural interfaces:
 
 ## Instruction set
 
-Two new reference types: `stringref`, and `stringcursor`.  Opaque, like
-`externref` and `funcref`.
+One new reference type: `stringref`.  Opaque, like `externref` and
+`funcref`.
 
 Many of these instructions treat string contents as being encoded in a
 given encoding.  Those instructions take an immediate uleb *encoding*
-parameter.  Additionally, instructions that access memory specify that
-memory by immediate.
+parameter.
 
 ```
 encoding ::= utf-8 | utf-16 | one-byte
-offset ::= i32 | i64
+```
+
+When reading or writing encoded bytes, the address in memory at which to
+write the bytes depends on the memory model of the WebAssembly module.
+```
+address ::= i32 | i64
 ```
 
 ### Creating strings
 
 ```
-(string.new $memory $encoding ptr:offset len:i32)
+(string.new $memory $encoding ptr:address len:i32)
   -> str:stringref
 ```
 Create a new string from the *`len`* bytes encoded in memory at *`ptr`*.
@@ -262,75 +266,104 @@ string table, encoded as a contiguous array of bytes that is a valid
 sequence of NUL-terminated UTF-8 strings.  The string table section must
 immediately precede the global section.
 
+### String cursors
+
+To represent positions in strings for the purposes of accessing string
+contents, we introduce the concept of "cursor", encoded as an `i32`.  A
+string consisting of *N* unicode scalar values will have *N*+1 distinct
+valid cursor values: one before each USV, and one at the end.  A cursor
+value of 0 denotes the string start (before the first USV).  It follows
+that 0 may also denote the end of the string also, for zero-length
+strings.
+
+The specific mapping from USV offset to cursor value is
+implementation-defined.  It may be that specific embeddings may give
+cursor values a meaning: for example, a JS embedding may specify that a
+cursor is a code unit offset, or a UTF-8-only embedding may use byte
+offsets.
+
+To move a cursor to a new position, use the `string.advance` and
+`string.rewind` seek instructions.
+
+```
+(string.advance str:stringref cursor:i32 codepoints:i32)
+  -> cursor:i32, codepoints:i32
+(string.rewind str:stringref cursor:i32 codepoints:i32)
+  -> cursor:i32, codepoints:i32
+```
+Return a new cursor into the string *`str`* which is *`codepoints`*
+codepoints after or before *`cursor`*.  Also return the number of
+codepoints by which the new cursor differs from the old, which may be
+less than the *`codepoints`* parameter if end-of-string or
+beginning-of-string would be reached.  The *`codepoints`* argument is
+interpreted as a `u32`.
+
+#### Invalid cursor values
+
+All instructions which take cursors trap if the cursor is not valid for
+the given string.
+
+#### Host strings which are not valid USV sequences
+
+In this MVP, it is not possible to produce a string which is not a valid
+sequence of unicode scalar values.
+
+However, strings provided by some hosts may support invalid USV
+sequences.  Notably, JavaScript, C#, and Java strings can include
+isolated surrogates, which are not valid unicode scalar values.  If the
+host's strings may contain isolated surrogates, each isolated surrogate
+counts as a codepoint.  `string.advance` and `string.rewind` do not trap
+for strings containing isolated surrogates.
+
 ### Accessing string contents
 
 ```
-(string.start str:stringref)
-  -> cur:stringcursor
-(string.end str:stringref)
-  -> cur:stringcursor
+(string.cur str:stringref cursor:i32)
+  -> codepoint:i32
 ```
-Create a new cursor for iterating over the contents of *`str`*.  The
-resulting cursor is an opaque immutable value, positioned at the start
-or end of *`str`*.
+Return the codepoint at *`cursor`* in *`str`*, as an i32.  The result is
+a unicode scalar value, unless the host's strings support isolated
+surrogates, in which case the result may be a surrogate.  If *`cursor`*
+is at the end of *`str`*, the result is -1.
 
 ```
-(string.pos cur:stringcursor)
-  -> offset:i32
-```
-Return the position of *`cur`*, in units of codepoints since the
-beginning of the string.
-
-```
-(string.advance cur:stringcursor offset:i32)
-  -> cur:stringcursor
-(string.rewind cur:stringcursor offset:i32)
-  -> cur:stringcursor
-```
-Return a new cursor which is *`offset`* codepoints after or before
-*`cur`*.  *`offset`* is treated as an unsigned value.  If the resulting
-cursor would advance or rewind beyond the bounds of the string, it is
-instead set to the end or beginning of the string, respectively.
-
-If the host's strings may contain isolated surrogates, each isolated
-surrogate counts as a codepoint.  `string.advance`, `string.rewind`, and
-`string.pos` do not trap for strings containing isolated surrogates.
-
-```
-(string.measure $encoding cur:stringcursor max-codepoints:i32)
+(string.measure $encoding str:stringref cursor:i32 codepoints:i32)
   -> bytes:i32, valid:i32
 ```
 Measure how many bytes would be necessary to encode the contents of the
-string starting at the cursor *`cur`*, limited to a maximum of
-*`max-codepoints`* codepoints.  Also return a second flag value
-indicating if those codepoints can be encoded in the given encoding,
-which can be used to know when the `one-byte` encoding might be
-appropriate, or if a host string contains invalid codepoints.
+string *`str`*, starting at cursor *`cursor`*, limited to a maximum of
+*`codepoints`* codepoints.  Also return a second flag value indicating
+if those codepoints can be encoded in the given encoding, which can be
+used to know when the `one-byte` encoding might be appropriate, or if a
+host string contains codepoints which are not unicode scalar values.  If
+the codepoints can't be encoded, both return values are 0.
 
 ```
-(string.encode $encoding $memory cur:stringcursor ptr:offset max-bytes:i32)
-  -> cur:stringcursor, bytes:i32
+(string.encode $encoding $memory str:stringref cursor:i32 ptr:address bytes:i32)
+  -> cursor:i32, codepoints:i32, bytes:i32
 ```
-Encode the contents of the string starting at the cursor *`cur`* to
-memory at *`ptr`*, limited to *`max-bytes`* bytes.  Return two values: a
-string cursor corresponding to the remaining contents of the string, and
-the number of bytes written.  Note that no `NUL` terminator is ever
-written.  If any codepoint cannot be encoded, trap.
+Encode the contents of the string *`str`*, starting at the cursor
+*`cursor`*, to memory at *`ptr`*, limited to *`bytes`* bytes.  Return
+three values: a string cursor pointing to the remaining contents of the
+string, the number of codepoints written, and the number of bytes
+written.  Note that no `NUL` terminator is ever written.  If any
+codepoint cannot be encoded, trap.
 
 ### Predicates
 
 ```
-(string.eq a:stringcursor b:stringcursor max-codepoints:i32) -> i32
+(string.eq a:stringref a-cursor:i32 b:stringref b-cursor:i32 codepoints:i32) -> i32
 ```
-Return 1 if the strings starting at the cursors *`a`* and *`b`* contain
-the same codepoint sequence, limited to comparing up to
-*`max-codepoints`* codepoints, and 0 otherwise.
+Return 1 if the strings *`a`* and *`b`* contain the same codepoint
+sequence, starting at the cursors *`a-cursor`* and *`b-cursor`*
+respectively, limited to comparing up to *`codepoints`* codepoints.
+Return 0 otherwise.
 
 ## Examples
 
 ### Make string from NUL-terminated UTF-8 in memory
 
-```
+```wasm
 (func $string-from-utf8 (param $ptr i32) (result $stringref)
   local.get $ptr
   local.get $ptr
@@ -340,7 +373,7 @@ the same codepoint sequence, limited to comparing up to
 
 ### Make string from one-byte codepoints in memory
 
-```
+```wasm
 (func $string-from-latin1 (param $ptr i32) (param $len i32) (result $stringref)
   local.get $ptr
   local.get $len
@@ -349,7 +382,7 @@ the same codepoint sequence, limited to comparing up to
 
 ### Make string from UTF-16 in memory
 
-```
+```wasm
 (func $string-from-utf16 (param $ptr i32) (param $units i32) (result $stringref)
   local.get $ptr
   local.get $units
@@ -360,16 +393,17 @@ the same codepoint sequence, limited to comparing up to
 
 ### Number of codepoints in string
 
-```
+```wasm
 (func $codepoint-length (param $str stringref) (result i32)
   local.get $str
-  string.end
-  string.pos)
+  i32.const 0 ;; Beginning of string
+  string.advance
+  return)
 ```
 
 ### String literals
 
-```
+```wasm
 (global $hey stringref (string.const "Hey"))
 
 (func $howdy (result stringref)
@@ -377,16 +411,16 @@ the same codepoint sequence, limited to comparing up to
 
 (func $is-cowboy (param $str stringref) (result i32)
   local.get $str
-  string.start
+  i32.const 0
   call $howdy
-  string.start
+  i32.const 0
   i32.const -1
   string.eq)
 ```
 
 ### Suffix, prefix comparisons
 
-```
+```wasm
 (func starts-with-hey? (param $str stringref) (result i32)
   global.get $hey
   string.start
@@ -397,18 +431,25 @@ the same codepoint sequence, limited to comparing up to
 
 (func ends-with-howdy? (param $str stringref) (result i32)
   string.const "Howdy"
-  string.start
+  i32.const 0
   local.get $str
-  string.end
+
+  ;; Compute cursor that is 5 codepoints before end of $str.
+  local.get $str
+  local.get $str
+  i32.const -1
+  string.advance
+  drop
   i32.const 5
   string.rewind
+
   i32.const 5
   string.eq)
 ```
 
 ### Store a stringref without copying
 
-```
+```wasm
 (table $strings 100 stringref)
 (global $string-count i32 (i32.const 0))
 
@@ -426,15 +467,14 @@ the same codepoint sequence, limited to comparing up to
 
 ### Copy string contents to application-managed memory
 
-```
+```wasm
 (func $malloc (param i32) (result i32))
 (func $utf8-contents (param $str stringref) (result i32)
-  (local $cur stringcursor)
+  (local $cur i32)
   (local $len i32)
   (local $ptr i32)
   local.get $str
-  string.start
-  local.tee $cur
+  i32.0
   i32.const -1
   string.measure utf-8             ;; push length and valid? flag
 
@@ -445,17 +485,19 @@ the same codepoint sequence, limited to comparing up to
   call $malloc                     ;; reserve space for bytes and NUL
   local.set $ptr
 
-  local.get $cur
+  local.get $str
+  i32.const 0
   local.get $ptr
   local.get $len
-  string.encode utf-8              ;; push new cursor and $len
+  string.encode utf-8              ;; push cursor, codepoints, and $len
 
   local.get $ptr
   i32.add
   i32.const 0
   i32.store8                       ;; write NUL
 
-  local.get $ptr)
+  local.get $ptr
+  return)
 ```
 
 ### Stream over contents of string
@@ -463,22 +505,24 @@ the same codepoint sequence, limited to comparing up to
 Assume you have a 1024-byte array of memory at `$buf`.  This function
 will trap on isolated surrogates.
 
-```
+```wasm
 (global $buf i32)
 (func $process-utf8 (param $ptr i32) (param $len i32))
 
 (func $process-string (param $str stringref)
+  (local $cursor i32)
   (local $bytes i32)
 
-  local.get $str
-  string.start
-
-  loop (param stringcursor)
+  loop
+    local.get $str
+    local.get $cursor
     global.get $buf
     i32.const 1024
-    string.encode utf-8              ;; push new cursor and $len
+    string.encode utf-8              ;; push new cursor, codepoints and $len
     local.tee $bytes
     (if i32.eqz (then return))       ;; if no bytes encoded, done
+    drop ;; ignore codepoints
+    local.set $cursor
 
     global.get $buf
     local.get $bytes
@@ -488,47 +532,38 @@ will trap on isolated surrogates.
 
 ### Stream over codepoints of string, handling isolated surrogates
 
-This function is probably slow; a faster version would handle valid
-utf-8 in bigger chunks.
+This function is probably slower than handling strings in chunks.
 
-```
-(global $buf i32)
-(func $process-utf8 (param $ptr i32) (param $len i32))
-(func $saw-isolated-surrogate (param $str stringref) (param $offset i32))
+```wasm
+(func $have-codepoint (param $codepoint i32))
 
 (func $process-string (param $str stringref)
-  (local $cur stringcursor)
-  (local $bytes i32)
+  (local $cur i32)
+  (local $ch i32)
 
-  local.get $str
-  string.start
-  local.set $cur
+  loop $loop
+    local.get $str
+    local.get $cur
+    string.cur
+    local.set $ch
 
-  loop
+    block $valid
+      local.get $ch
+      i32.const -1
+      i32.ne
+      br_if $valid
+      return
+    end
+
+    local.get $ch
+    call $have-codepoint
+
+    local.get $str
     local.get $cur
     i32.const 1
-    string.measure utf-8
-    i32.eqz ;; check valid?
-    if
-      local.get $str
-      local.get $cur
-      string.pos
-      call $saw-isolated-surrogate
-      local.get $cur
-      i32.const 1
-      string.advance
-      local.set $cur
-    else
-      local.get $cur
-      global.get $ptr
-      i32.const 1024
-      string.encode utf-8
-      local.set $bytes
-      local.set $cur
-      global.get $ptr
-      local.get $bytes
-      call $process-utf8
-    end
+    string.advance
+    drop
+    local.set $cur
   end)
 ```
 
@@ -565,45 +600,51 @@ where they are needed.
 
 https://github.com/guybedford/proposal-is-usv-string
 
-### How would strings be implemented on non-browser run-times?
+### What is the expected implementation on non-browser run-times?
 
 Assuming that the non-browser implementation uses UTF-8 as the native
-string representation, then a stringref is just a pointer and a
-reference count.  A cursor is just a string, a byte offset, and a
-codepoint offset.  Measuring UTF-8 encodings is just `strnlen(3)`.
-Measuring UTF-16 would be via a callout.  Encoding UTF-8 is just
-`memcpy`.
-
-### Why are cursors immutable?
-
-The thought was that this would make non-escaping string cursors more
-transparent to the compiler at run-time.  Otherwise the run-time
-compiler would have to know more about cursor data structures to do SROA
-on them, and would often have to assume reloads would be needed after
-function calls.  But, feedback welcome.
-
-### Can you have a string cursor in a global?  Or a table?
-
-Technically, yes.  However it would be nice if string cursors remained a
-WebAssembly thing, not leaking into JavaScript land.  For that reason we
-propose that any attempt to export or import a cursor across the
-JS/WebAssembly boundary would be an error.
+string representation, then a stringref is a pointer, a length, and a
+reference count.  A cursor is a byte offset into the string.  Cursor
+validation is ensuring the cursor is less than or equal to the string
+byte length, and that `(ptr[cursor] & 0x80) == 0`.  Measuring UTF-8
+encodings is just length minus the cursor.  Measuring UTF-16 would be
+via a callout.  Encoding UTF-8 is just `memcpy`.
 
 ### What's the expected implementation in web browsers?
 
-We expect that web browsers use JS strings as `stringref`, and inside a
-function always represent a cursor as an unpacked tuple of JS string,
-code unit offset, and codepoint offset.  If a cursor escapes, only then
-would you allocate a new instance of a GC-managed type for
-`stringcursor`.  Measuring, encoding, and equality predicates would call
-out to run-time functions that would dispatch over polymorphic values.
-The support for one-byte encodings may prove to be a performance benefit
-also.
+We expect that web browsers use JS strings as `stringref`.  We expect a
+cursor to be a code unit offset.  Seeking, measuring, encoding, and
+equality predicates would call out to run-time functions that would
+dispatch over polymorphic values.  The support for one-byte encodings
+may prove to be a performance benefit also.
+
+### The meaning of string cursor values is implementation-defined?!?
+
+It's a compromise.  We really want to support efficient access to
+JavaScript strings, but we don't want to expose the idea of iterating
+JavaScript strings in terms of code units, because of non-web
+embeddings.  So we iterate instead in terms of unicode scalar values,
+with defined exceptional behavior if there are isolated surrogates.  But
+mapping USV offset to code unit offset is O(n) -- so we need cursors
+somehow to avoid quadratic algorithms.
+
+The question is to answer is, should we expose cursors as i32 values
+that the user can see, or keep them opaque in a new type?  Opaque
+cursors could avoid checks in some cases and would hide
+implementation-defined differences.  But if strings are processed in
+chunks, cursor validity check overhead is likely to be low relative to
+overall program time.  So it's just a tradeoff then between exposing
+implementation-defined cursor values, versus the cognitive/spec overhead
+of having to define an opaque cursor type.  After going back and forth
+on this multiple times, it would seem that i32 cursors are a workable
+local maximum.
+
+See https://github.com/wingo/wasm-strings/issues/6 for a full
+discussion.
 
 ### Are stringrefs nullable?
 
-Oh God I guess so.  `ref.null string` it is I guess!!  And cursors also
-:sob: :sob: :sob:
+Oh God I guess so.  `ref.null string` it is I guess!!  :sob: :sob: :sob:
 
 ### What kinds of performance gains can we expect?
 
