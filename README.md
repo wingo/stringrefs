@@ -320,10 +320,10 @@ sequence of unicode scalar values.
 However, strings provided by some hosts may support invalid USV
 sequences.  Notably, JavaScript, C#, and Java strings can include
 isolated surrogates, which are not valid unicode scalar values.  If a
-host's string contains isolated surrogates, there is a valid cursor
-position before each isolated surrogate.  In this way, `string.advance`
-and `string.rewind` do not trap for strings containing isolated
-surrogates.
+string created by a host contains isolated surrogates, there is a valid
+cursor position before each isolated surrogate.  In this way,
+`string.advance` and `string.rewind` do not trap for strings containing
+isolated surrogates.
 
 ### Accessing string contents
 
