@@ -372,7 +372,7 @@ Return 0 otherwise.
 ## Examples
 
 We assume that the textual syntax for `string.encode` and `string.new`
-allow you to elide the memory, in which case it defaults to 0.
+allows you to elide the memory, in which case it defaults to 0.
 
 ### Make string from NUL-terminated UTF-8 in memory
 
@@ -409,9 +409,10 @@ allow you to elide the memory, in which case it defaults to 0.
 ```wasm
 (func $codepoint-length (param $str stringref) (result i32)
   local.get $str
-  i32.const 0 ;; Beginning of string
-  string.advance
-  return)
+  i32.const 0    ;; initial cursor: beginning of string
+  i32.const -1   ;; advance by all codepoints
+  string.advance ;; push new cursor, codepoints
+  return)        ;; just return codepoints
 ```
 
 ### String literals
@@ -436,9 +437,9 @@ allow you to elide the memory, in which case it defaults to 0.
 ```wasm
 (func starts-with-hey? (param $str stringref) (result i32)
   global.get $hey
-  string.start
+  i32.const 0
   local.get $str
-  string.start
+  i32.const 0
   i32.const 3
   string.eq)
 
@@ -447,15 +448,19 @@ allow you to elide the memory, in which case it defaults to 0.
   i32.const 0
   local.get $str
 
-  ;; Compute cursor that is 5 codepoints before end of $str.
+  ;; Get cursor 5 codepoints before end of $str:
   local.get $str
+  ;; First get cursor at end of $str...
   local.get $str
+  i32.const 0
   i32.const -1
   string.advance
   drop
+  ;; ...then rewind by 5.
   i32.const 5
   string.rewind
 
+  ;; Limit comparison to 5 codepoints.
   i32.const 5
   string.eq)
 ```
@@ -464,17 +469,17 @@ allow you to elide the memory, in which case it defaults to 0.
 
 ```wasm
 (table $strings 100 stringref)
-(global $string-count i32 (i32.const 0))
+(global $next-handle i32 (i32.const 0))
 
 (func $intern-string (param $str stringref) (result i32)
   (local $handle i32)
-  global.get $string-count
+  global.get $next-handle
   local.tee $handle
   local.get $str
   table.set $strings
   i32.const 1
   i32.add
-  global.set $string-count
+  global.set $next-handle
   local.get $handle)
 ```
 
@@ -487,7 +492,7 @@ allow you to elide the memory, in which case it defaults to 0.
   (local $len i32)
   (local $ptr i32)
   local.get $str
-  i32.0
+  i32.const 0
   i32.const -1
   string.measure utf-8             ;; push length and valid? flag
 
@@ -523,7 +528,7 @@ will trap on isolated surrogates.
 (func $process-utf8 (param $ptr i32) (param $len i32))
 
 (func $process-string (param $str stringref)
-  (local $cursor i32)
+  (local $cursor i32)                ;; initial value of 0 is start
   (local $bytes i32)
 
   loop
@@ -554,29 +559,28 @@ This function is probably slower than handling strings in chunks.
   (local $cur i32)
   (local $ch i32)
 
-  loop $loop
-    local.get $str
-    local.get $cur
-    string.cur
-    local.set $ch
+  block $done
+    loop $loop
+      local.get $str
+      local.get $cur
+      string.cur
+      local.set $ch
 
-    block $valid
       local.get $ch
       i32.const -1
-      i32.ne
-      br_if $valid
-      return
+      i32.eq
+      br_if $done
+
+      local.get $ch
+      call $have-codepoint
+
+      local.get $str
+      local.get $cur
+      i32.const 1
+      string.advance
+      drop
+      local.set $cur
     end
-
-    local.get $ch
-    call $have-codepoint
-
-    local.get $str
-    local.get $cur
-    i32.const 1
-    string.advance
-    drop
-    local.set $cur
   end)
 ```
 
