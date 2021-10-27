@@ -256,6 +256,18 @@ alignment for both operands and will trap otherwise.  Attempting to
 create a string with bytes that are not valid for the encoding will
 trap.  No terminating `NUL` byte is expected.
 
+#### `string.new` size limits
+
+The maximum value for *`len`* is 2<sup>31</sup>–1 bytes.  Passing a
+higher value traps.
+
+Creating a string is a form of dynamic allocation and can fail.  The
+same implementation running on different machines can have different
+behaviors.  The specification can only say that byte sizes above a
+certain limit *must* fail; but for byte sizes within the limits, the
+allocations *may* fail.  If an allocation fails, the implementation
+must trap.  Fallible `string.new` is a possible future extension.
+
 ### String literals
 
 ```
@@ -274,6 +286,15 @@ valid UTF-8 strings.  Because literal strings can contain codepoint 0,
 strings in the string table do not use NUL as a terminator. The string table section must
 immediately precede the global section, or where the global section
 would be, in the binary.
+
+#### `string.const` size limits
+
+The maximum size for the UTF-8 encoding of an individual string literal
+is 2<sup>31</sup>–1 bytes.  Embeddings may impose their own limits which
+are more restricted.  But similarly to `string.new`, instantiating a
+module with string literals may fail due to lack of memory resources,
+even if the string size is formally within the limits.  However
+`string.const` itself never traps when passed a valid literal offset.
 
 ### String cursors
 
@@ -325,7 +346,36 @@ cursor position before each isolated surrogate.  In this way,
 `string.advance` and `string.rewind` do not trap for strings containing
 isolated surrogates.
 
+#### Cursor range limits
+
+The maximum valid `i32` cursor value is 2<sup>31</sup>.  Processing a
+string whose highest cursor value would be greater than 2<sup>31</sup>
+with the `string.advance`, `string.rewind`, `string.cur`,
+`string.measure`, `string.encode`, and `string.eq` instructions must
+trap.
+
+Given that there must be a distinct cursor value for each codepoint in a
+string, and one for the end, this constrains the strings that are
+processed by to a maximum of 2<sup>31</sup>–1 codepoints.  Not all
+strings have packed cursor values, so the codepoint size limit in
+practice may be lower for any given string.  This specification can
+therefore represent codepoint counts with an `i32` without risk of
+overflow.
+
+Future extensions of the string proposal along the lines of the
+[memory64
+proposal](https://github.com/WebAssembly/memory64/blob/main/proposals/memory64/Overview.md)
+may allow for 64-bit variants of the cursor-using instructions, which
+could relax these restrictions.
+
+In practice, no web browser embedding allows for strings longer than
+2<sup>31</sup>–1 code units, so no string from JavaScript is out of
+range for the instructions in this proposal.
+
 ### Accessing string contents
+
+All parameters and return values measuring a number of codepoints or a
+number of bytes represent these sizes as unsigned values.
 
 ```
 (string.cur str:stringref cursor:i32)
@@ -338,15 +388,22 @@ is at the end of *`str`*, the result is -1.
 
 ```
 (string.measure $encoding str:stringref cursor:i32 codepoints:i32)
-  -> bytes:i32, valid:i32
+  -> bytes:i32
 ```
 Measure how many bytes would be necessary to encode the contents of the
 string *`str`*, starting at cursor *`cursor`*, limited to a maximum of
-*`codepoints`* codepoints.  Also return a second flag value indicating
-if those codepoints can be encoded in the given encoding, which can be
-used to know when the `one-byte` encoding might be appropriate, or if a
-host string contains codepoints which are not unicode scalar values.  If
-the codepoints can't be encoded, both return values are 0.
+*`codepoints`* codepoints.  If the contents of the string cannot be
+encoded in the given encoding, return -1.
+
+The maximum number of bytes returned by `string.measure` is
+2<sup>31</sup>-1.  If an encoding would require more bytes, it is as if
+the contents can't be encoded at all (the return value is -1).
+
+(Note that the limit on cursor values constrains strings to have a
+maximum of 2<sup>31</sup>–1 codepoints, but it may be that such a string
+could exceed even 2<sup>32</sup> bytes in a given encoding; e.g. a
+string of 2<sup>31</sup>-1 `\uFFFF` codepoints would require
+2<sup>32</sup>+2<sup>31</sup>-3 bytes when encoded as UTF-8.)
 
 ```
 (string.encode $encoding $memory str:stringref cursor:i32 ptr:address bytes:i32)
@@ -358,6 +415,10 @@ three values: a string cursor pointing to the remaining contents of the
 string, the number of codepoints written, and the number of bytes
 written.  Note that no `NUL` terminator is ever written.  If any
 codepoint cannot be encoded, trap.
+
+The maximum number of bytes that can be encoded at once by
+`string.encode` is 2<sup>31</sup>-1.  If an encoding would require more
+bytes, it is as if the codepoints can't be encoded (a trap).
 
 ### Predicates
 
@@ -494,10 +555,18 @@ allows you to elide the memory, in which case it defaults to 0.
   local.get $str
   i32.const 0
   i32.const -1
-  string.measure utf-8             ;; push length and valid? flag
+  string.measure utf-8
+  local.set $len
 
-  drop                             ;; drop valid?; encode may trap
-  local.tee $len
+  block $valid
+    local.get $len
+    i32.const -1
+    i32.ne
+    br_if $valid
+    unreachable                    ;; trap on error
+  end
+
+  local.get $len
   i32.const 1
   i32.add
   call $malloc                     ;; reserve space for bytes and NUL
