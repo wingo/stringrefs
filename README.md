@@ -28,7 +28,7 @@ find good compromises are "minimal" and "viable".
 ## Definitions
  - *codepoint*: An integer in the range [0,0x10FFFF].
  - *surrogate*: A codepoint in the range [0xD800,0xDFFF].
- - *unicode scalar value*: a codepoint that is not a surrogate.
+ - *unicode scalar value*: A codepoint that is not a surrogate.
  - *character*: An imprecise concept that we try to avoid in this
     document.
  - *code unit*: An indivisible unit of an encoded unicode scalar value.
@@ -37,7 +37,7 @@ find good compromises are "minimal" and "viable".
     the unicode scalar value itself.
  - *high surrogate*: A surrogate in the range [0xD800,0xDBFF].
  - *low surrogate*: A surrogate which is not a high surrogate.
- - *surrogate pair*: a sequence of a *high surrogate* followed by a *low
+ - *surrogate pair*: A sequence of a *high surrogate* followed by a *low
     surrogate*, used by UTF-16 to encode a codepoint in the range
     [0x10000,0x10FFFF].
  - *isolated surrogate*: Any surrogate which is not part of a surrogate
@@ -55,21 +55,14 @@ of implications.
 JS strings are immutable, so WebAssembly strings should also be
 immutable.
 
-#### No `get-char-at` method
-
-A JavaScript string stores its length in 16-bit code units, not unicode
-scalar values.  In the general case, getting the *n*th USV from a string
-requires parsing all preceding code units.  We would not want to design
-an API that would encourage straightforward uses (e.g. looping over
-unicode scalar values) to run in quadratic time.
-
 #### Polymorphism
 
 JS engines typically represent strings in many different ways: strings
-which are "narrow" (in which all code units are in [0,0xFF] and so need
-only one byte per code unit) or "wide" (two bytes per code unit), rope
-strings or not, string slices or not, and external or not.  That's at
-least 16 different kinds of strings.
+which are "narrow" (in which all code units are in [0,0xFF] and can use
+a fixed-width encoding with only one byte per code unit) or "wide" (two
+bytes per code unit, 1 or 2 code units per codepoint), rope strings or
+not, string slices or not, and external or not.  That's at least 16
+different kinds of strings.
 
 JavaScript can mitigate this polymorphism to a degree via adaptive
 compilation, which can devirtualize based on the kind of strings seen at
@@ -140,16 +133,28 @@ If we were just considering simplicity, the best solution would be to
 say "strings are sequences of unicode scalar values", but we know that
 for JavaScript this is not the case.
 
-However, we think we can get closer to the simple solution by only
-including interfaces that treat strings as USV sequences, for example by
-only including routines that access string contents in terms of UTF-8,
-UTF-16, and other valid Unicode encodings that exclude isolated
-surrogates by construction.  Isolated surrogates are rare in JavaScript
-and the tail should not wag the dog.
+However, we think we can get closer to the simple solution by primarily
+working in terms of unicode scalar values.  WebAssembly on its own
+should not be able to create strings with isolated surrogates, and
+therefore we should only include support for reading and writing
+standard Unicode encoding schemes which exclude isolated surrogates by
+construction, for example UTF-8 and UTF-16.  Isolated surrogates are
+rare in JavaScript and the tail should not wag the dog.
 
-It could be that we're wrong, though, and so we'd need to leave the door
-open to add interfaces that access string contents using more general
-encodings such as WTF-8.
+Such problematic strings can come from a host, however, and where it is
+as simple to define a behavior as to require an implementation to trap,
+we will lean towards defined non-trapping behavior.  The proposal also
+leaves the door open to add interfaces that access string contents using
+more general encoding schemes such as WTF-8 if needed in the future.
+
+#### No `get-char-at` method
+
+A JavaScript string is composed of a sequence of 16-bit code units which
+encode a sequence of codepoints, in which each codepoint corresponds to
+1 or 2 code units.  In the general case, getting the *n*th unicode
+scalar value from a string requires parsing all preceding code units.
+We would not want to design an API that would encourage straightforward
+uses (e.g. looping over unicode scalar values) to run in quadratic time.
 
 ### Oracle: JS engine C++ API
 
@@ -316,12 +321,14 @@ against each other.
 
 If a host represents strings internally using UTF-8, UTF-16, or UTF-32,
 or a variant thereof such as the one used in JavaScript, cursor values
-are code unit offsets.  For example, because JavaScript hosts have to
-represent strings as (logical) sequences of 16-bit code units, a
-WebAssembly string cursor for a WebAssembly implementation embedded in a
-web browser will be an index into a string (the same as the operand to
-JavaScript's
+are code unit offsets.
+
+For example, because JavaScript hosts have to represent strings as
+(logical) sequences of 16-bit code units, a WebAssembly string cursor
+for a WebAssembly implementation embedded in a web browser will be a
+code unit offset (the same as the operand to JavaScript's
 [`String.prototype.charCodeAt`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/charCodeAt).
+
 For a WebAssembly implementation that represents strings as UTF-8
 internally, cursor values are byte offsets.  The intention is that
 accessing content in a string with a cursor has the least possible
