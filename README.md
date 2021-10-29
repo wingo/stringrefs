@@ -833,3 +833,121 @@ That said though, any copy is likely to remain in cache, amortizing the
 cost of the second access.  Inlining the (likely) UTF-8 accesses on the
 WebAssembly side seems more important than preventing a copy by using a
 codepoint-by-codepoint non-copying interface.
+
+### Why not just use `externref` and imported functions?
+
+The instruction set could be implemented with imported functions,
+replacing the `stringref` type with `externref`.  So why bother adding
+it to WebAssembly itself?  Three reasons: platform expressivity,
+performance, and security.
+
+On the first point: if the strings feature required some capability from
+the host, then it would be clearly best as a library.  For example,
+WebGL access falls in this category.  But reference-typed strings are a
+more fundamental feature common to all languages that use automatic
+memory management.  In that way they are closer to the GC proposal;
+although you could implement structs and arrays via externref and
+imports, if you did that you might as well compile to JavaScript instead
+of WebAssembly.  It should be possible to make a WebAssembly program
+that uses reference-typed strings (because almost all such programs
+would have strings) without relying on any JavaScript at all.
+
+Also, the evolutionary endpoint of an externref-and-imports strategy is
+a JavaScript-specific string interface.  Without any broader WebAssembly
+platform concern, strings-using WebAssembly code would find itself
+relying on details of JavaScript's string representation, for example
+processing strings one code unit at a time instead of one codepoint at a
+time.  This is not a good platform outcome.
+
+Finally, though the WebAssembly platform should be able to stand alone,
+it should also interoperate smoothly with hosts, especially JavaScript
+on the web.  This rules out any implementation of strings in terms of
+reference-typed structs and arrays: not only would such an
+implementation be likely slower than the host's strings, it would also
+be incompatible.  On the web, WebAssembly and JavaScript should use the
+same string implementation.
+
+On the performance side, we expect that WebAssembly strings will be
+faster than externref+imports:
+
+ 1. Whereas externrefs might need to be a tagged union, stringrefs can be
+    unpacked pointers.
+ 2. WebAssembly instructions are likely faster and less of an
+    optimization barrier than callouts to imports.
+ 3. Run-time helper code for WebAssembly instructions is probably
+    implemented in C++/Rust/etc more directly, resulting in more
+    predictable performance than e.g. an encoder implemented in JS (for
+    web embeddings).
+ 4. Reading string contents via
+    `string.encode`-to-UTF-8-then-process-inline is likely
+    faster than calling out to JavaScript to read code units one at a
+    time.  WebAssembly-to-JavaScript calls are cheap but not free.
+
+On the other hand, it's true that JS run-time routines can use adaptive
+JIT techniques to possibly inline representation-specific accessors.
+This is of limited use though for run-time routines with many different
+call sites.
+
+On the reliability and security side, adding strings to WebAssembly
+removes a significant user of extra-module access to memory.  Because
+the WebAssembly code can pick apart the string itself, that's one fewer
+reason for the WebAssembly module to have to expose its memory.
+
+### How does this relate to the component model and interface types?
+
+The component model is [a vision of how to compose systems out of
+shared-nothing parts implemented in
+WebAssembly](https://github.com/WebAssembly/component-model/pull/1/files).
+The boundaries between these components are mediated by interface types,
+which specify how to communicate data from one component to another in
+the most efficient way possible.
+
+At one level, reference-typed strings don't appear have anything to do
+with the component model.  Because components are specified to not share
+anything, even GC-managed data, we don't expect WebAssembly strings to
+pass across a component boundary in the zero-copy way that this proposal
+has as a design goal.
+
+From the perspective of the component model, WebAssembly strings are
+rather an *intra-component* concern.  A component may be composed
+internally of a number of WebAssembly modules, as well as possible host
+facilities such as JavaScript.  The zero-copy properties provided by
+WebAssembly strings apply to the inter-module, intra-component
+boundaries of a program.
+
+That said, strings in the abstract are an important data type, and
+relate to interface types (a WebAssembly proposal based on the component
+model).  Obviously you will want to be able to use WebAssembly strings
+with interface types.  The shared-nothing design choice of the component
+model then implies that string contents should be copied when they cross
+a component boundary.
+
+Incidentally, for inter-component interfaces that deal in strings, the
+component model specifies that abstractly, [strings are sequences of
+unicode scalar
+values](https://github.com/WebAssembly/interface-types/issues/135).
+This implies that some JavaScript strings can't traverse a component
+boundary, because of the potential for isolated surrogates, and also
+implies an eager check that a WebAssembly string is valid, for an
+interface-typed call.  In practice this is not a problem because the
+string's contents are being copied anyway and so can be validated at the
+same time.
+
+Interface types are used to specify a WebAssembly function's signature
+in an abstract way.  This signature should then be compiled down to a
+concrete adapter function specialized to the data representations used
+by the caller and the callee.  The instruction set in this proposal can
+be used to implement the adapter function for passing stringrefs as
+strings; assuming that the adapter function is generated in such a way
+that it has access to the target memory, `string.encode` can implement
+the copy and validation at the same time.  `string.new` would be the
+implementation of getting a stringref from an interface-typed string
+value.
+
+Note that because this proposal can't create strings that are not USV
+sequences, a WebAssembly implementation embedded by a host that also
+can't produce USV strings can avoid any component-model string
+validation checks.  This would be the case notably for hosts that use
+UTF-8 as their underlying string representation; passing a stringref to
+an interface-type interface would probably compile down to just a memcpy
+of the stringref's contents.
