@@ -1,6 +1,7 @@
-# Host-Managed Strings in WebAssembly
+# Reference-Typed Strings
 
-A minimal-viable-product (MVP) proposal for WebAssembly.
+A minimum viable proposal to add a reference-typed strings to
+WebAssembly (the `stringref` proposal).
 
 ## Champions
 
@@ -52,7 +53,7 @@ of implications.
 
 #### Immutable strings
 
-JS strings are immutable, so WebAssembly strings should also be
+JS strings are immutable, so a WebAssembly `stringref` should also be
 immutable.
 
 #### Polymorphism
@@ -79,7 +80,7 @@ string instruction per character, and instead will encourage encoding
 
 ### JavaScript interoperability and surrogates
 
-The WebAssembly strings proposal has to consider surrogates because we
+The `stringref` proposal has to consider surrogates because we
 want WebAssembly strings to have good interoperation with JavaScript,
 whose strings are composed of 16-bit code units, not codepoints and not
 unicode scalar values.
@@ -130,12 +131,12 @@ to do would be to consider strings as being composed of 16-bit code
 units.  However this does not map to many other languages.
 
 If we were just considering simplicity, the best solution would be to
-say "strings are sequences of unicode scalar values", but we know that
-for JavaScript this is not the case.
+say "a `stringref` is a sequence of unicode scalar values", but we know
+that for JavaScript this is not the case.
 
 However, we think we can get closer to the simple solution by primarily
 working in terms of unicode scalar values.  WebAssembly on its own
-should not be able to create strings with isolated surrogates, and
+should not be able to create a `stringref` with isolated surrogates, and
 therefore we should only include support for reading and writing
 standard Unicode encoding schemes which exclude isolated surrogates by
 construction, for example UTF-8 and UTF-16.  Isolated surrogates are
@@ -222,7 +223,7 @@ includes the following procedural interfaces:
     originating in JavaScript has unpaired surrogates.
  4. Don't provide a `get-usv-at-index` accessor, to avoid O(n) search
     for `utf-8` and `utf-16` backing stores.
- 5. When attempting to create a string from an invalid byte string or
+ 5. When attempting to create a string from an invalid byte sequence or
     when encoding bytes from a string fails, trap.  If this proves too
     much of a constraint in practice, our future escape hatch is to add
     additional encodings.
@@ -292,9 +293,9 @@ be used in global variable initializers.
 The `string.const` section indicates the literal as an `i32` index into
 a new custom section: a string table, encoded as a `vec(vec(u8))` of
 valid UTF-8 strings.  Because literal strings can contain codepoint 0,
-strings in the string table do not use NUL as a terminator. The string table section must
-immediately precede the global section, or where the global section
-would be, in the binary.
+strings in the string table do not use NUL as a terminator. The string
+table section must immediately precede the global section, or where the
+global section would be, in the binary.
 
 #### `string.const` size limits
 
@@ -315,13 +316,13 @@ value of 0 denotes the string start (before the first USV).  It follows
 that 0 may also denote the end of the string also, for zero-length
 strings.
 
-A cursor value is an offset into a string.  Cursors uniquely identify a
-position in a string, and are ordered, and therefore can be compared
-against each other.
+A cursor value is an offset into a string's contents.  Cursors uniquely
+identify a position in a string, and are ordered, and therefore can be
+compared against each other.
 
-If a host represents strings internally using UTF-8, UTF-16, or UTF-32,
-or a variant thereof such as the one used in JavaScript, cursor values
-are code unit offsets.
+If a host represents string contents internally using UTF-8, UTF-16, or
+UTF-32, or a variant thereof such as the one used in JavaScript, cursor
+values are code unit offsets.
 
 For example, because JavaScript hosts have to represent strings as
 (logical) sequences of 16-bit code units, a WebAssembly string cursor
@@ -335,7 +336,7 @@ accessing content in a string with a cursor has the least possible
 overhead.  This also allows hosts to communicate string positions with
 WebAssembly programs.
 
-If a host does not represent strings using a unicode encoding scheme,
+If a host does not represent strings using a Unicode encoding scheme,
 the specific mapping from USV offset to cursor value is
 implementation-defined, with the requirement that values be ordered and
 that each position must have one and only one cursor value.
@@ -390,7 +391,7 @@ practice may be lower for any given string.  This specification can
 therefore represent codepoint counts with an `i32` without risk of
 overflow.
 
-Future extensions of the string proposal along the lines of the
+Future extensions of the `stringref` proposal along the lines of the
 [memory64
 proposal](https://github.com/WebAssembly/memory64/blob/main/proposals/memory64/Overview.md)
 may allow for 64-bit variants of the cursor-using instructions, which
@@ -554,7 +555,7 @@ allows you to elide the memory, in which case it defaults to 0.
   string.eq)
 ```
 
-### Store a stringref without copying
+### Store a `stringref` without copying
 
 ```wasm
 (table $strings 100 stringref)
@@ -712,12 +713,10 @@ also avoids eager string encoding onto the stack and the need for NUL
 termination, allowing string contents to be written to memory exactly
 where they are needed.
 
-https://github.com/guybedford/proposal-is-usv-string
-
 ### What is the expected implementation on non-browser run-times?
 
 Assuming that the non-browser implementation uses UTF-8 as the native
-string representation, then a stringref is a pointer, a length, and a
+string representation, then a `stringref` is a pointer, a length, and a
 reference count.  The specification requires that cursor values be UTF-8
 code unit offsets, which are byte offsets from the beginning of the
 string.  Cursor validation is ensuring the cursor is less than or equal
@@ -742,14 +741,14 @@ contents, starting at a specific position.
 Under the hood, string cursors must relate to host string
 representation.  For example, we really want to support efficient access
 to JavaScript strings, so string cursors in a web browser should express
-positions in terms of UTF-16 code unit offsets.  But we don't want
-WebAssembly strings to be specified in terms of UTF-16 only; non-web
-embeddings will likely represent strings internally using other
-encodings (often UTF-8).  So instead we advance cursors in units of
-unicode scalar values, with some allowances for isolated surrogates from
-JavaScript.  But we can't define string cursors as being USV offsets,
-because mapping USV offset to code unit offset is O(n).  Cursors allow
-us to avoid quadratic algorithms.
+positions in terms of UTF-16 code unit offsets.  But we don't want the
+`stringref` facility to be specified in terms of UTF-16 only; non-web
+embeddings will likely represent `stringref` contents internally using
+other encodings (often UTF-8).  So instead we advance cursors in units
+of unicode scalar values, with some allowances for isolated surrogates
+from JavaScript.  But we can't define string cursors as being USV
+offsets, because mapping USV offset to code unit offset is O(n).
+Cursors allow us to avoid quadratic algorithms.
 
 The question then becomes, because cursor values relate to a host's
 string representation, should we hide the details of what a string
@@ -760,8 +759,8 @@ All things being equal, it would have been nice to define string cursors
 in such a way that a program running on a UTF-8 host would behave
 exactly the same as for a UTF-16 host.  We could have provided this
 property by making string cursors opaque.  This could have gone two
-ways: if we made cursors a first-class reference-typed value, cursors
-could hold a reference to their strings directly.  There would then be
+ways: if we made cursors a first-class reference-typed value, a cursor
+could hold a reference to its `stringref` directly.  There would then be
 no need for cursor validity checks.  On the other hand, then we would
 have a new type that would infiltrate everything, from implementation to
 JavaScript API to the type system and so on.  And, absent compiler
@@ -770,26 +769,26 @@ heroics, reference-typed cursors may cause high allocation overheads.
 The other way you could make cursors opaque would be as opaque scalar
 values.  The idea is that a cursor is really an `i32` under the hood,
 but its value isn't accessible.  Such a cursor wouldn't stand alone in
-the way reference-typed cursors would: you need to pass a string and a
-cursor to instructions, and you need to check the cursor for validity
-with regards to the string.  We still have some of the type profusion
-issues from a "cognitive load" point of view.  But, you couldn't observe
-the difference in cursor values between implementations, which would be
-a nice property.
+the way reference-typed cursors would: you need to pass a `stringref`
+and a cursor to instructions, and you need to check the cursor for
+validity with regards to the string.  We still have some of the type
+profusion issues from a "cognitive load" point of view.  But, you
+couldn't observe the difference in cursor values between
+implementations, which would be a nice property.
 
 In the end though, besides simplicity, what tipped the balance towards
 plain `i32` values was precisely that string cursors could be meaningful
 to the host instead of opaque.  A host should be able to reason about
 string positions and communicate those positions to WebAssembly -- after
-all, the strings belong to the host too.  Specifying that string cursors
-are code unit offsets makes this possible, while also constraining
-e.g. WebAssembly implementations in different web browsers to all use
-the same notion of string offsets.
+all, `stringref` values belong to the host too.  Specifying that string
+cursors are code unit offsets makes this possible, while also
+constraining e.g. WebAssembly implementations in different web browsers
+to all use the same notion of string offsets.
 
 See https://github.com/wingo/wasm-strings/issues/6 and
 https://github.com/wingo/wasm-strings/issues/11 for a full discussion.
 
-### Are stringrefs nullable?
+### Is the `stringref` type nullable?
 
 Oh God I guess so.  `ref.null string` it is I guess!!  :sob: :sob: :sob:
 
@@ -818,19 +817,19 @@ just the immutable codepoint sequence in question, and not all of
 memory.
 
 Additionaly, interfacing between memory lifetimes in C/C++ and
-JavaScript is bug-prone.  WebAssembly strings would eliminate questions
-of memory ownership, reducing the risk of use-after-free, data
-corruption, write overruns, and privileged data leakage.
+JavaScript is bug-prone.  Using `stringref` would eliminate questions of
+memory ownership, reducing the risk of use-after-free, data corruption,
+write overruns, and privileged data leakage.
 
 ### Doesn't the `encode` interface imply some copying overhead?
 
-It's true that it would be nice to read the contents of a string
+It's true that it would be nice to read the contents of a `stringref`
 "directly".  However given the polymorphism of JS strings, this doesn't
-seem to be possible in theory; and as strings are reference-typed,
-there's no interface currently to be able to read and write their
-contents.  `i32.load8_u` only works from memory, not GC-managed objects.
-That said though, any copy is likely to remain in cache, amortizing the
-cost of the second access.  Inlining the (likely) UTF-8 accesses on the
+seem to be possible in theory; and as a reference type there's no
+interface currently to be able to read and write `stringref` contents.
+`i32.load8_u` only works from memory, not GC-managed objects.  That said
+though, any copy is likely to remain in cache, amortizing the cost of
+the second access.  Inlining the (likely) UTF-8 accesses on the
 WebAssembly side seems more important than preventing a copy by using a
 codepoint-by-codepoint non-copying interface.
 
@@ -846,13 +845,13 @@ the host, then it would be clearly best as a library.  For example,
 WebGL access falls in this category.  But reference-typed strings are a
 more fundamental feature common to all languages that use automatic
 memory management.  In that way they are closer to the GC proposal;
-although you could implement structs and arrays via externref and
+although you could implement structs and arrays via `externref` and
 imports, if you did that you might as well compile to JavaScript instead
 of WebAssembly.  It should be possible to make a WebAssembly program
 that uses reference-typed strings (because almost all such programs
 would have strings) without relying on any JavaScript at all.
 
-Also, the evolutionary endpoint of an externref-and-imports strategy is
+Also, the evolutionary endpoint of an `externref`-and-imports strategy is
 a JavaScript-specific string interface.  Without any broader WebAssembly
 platform concern, strings-using WebAssembly code would find itself
 relying on details of JavaScript's string representation, for example
@@ -867,11 +866,11 @@ implementation be likely slower than the host's strings, it would also
 be incompatible.  On the web, WebAssembly and JavaScript should use the
 same string implementation.
 
-On the performance side, we expect that WebAssembly strings will be
-faster than externref+imports:
+On the performance side, we expect that `stringref` will be
+faster than `externref`+imports:
 
- 1. Whereas externrefs might need to be a tagged union, stringrefs can be
-    unpacked pointers.
+ 1. Whereas an `externref` might need to be a tagged union, a
+    `stringref` can be an unpacked pointer.
  2. WebAssembly instructions are likely faster and less of an
     optimization barrier than callouts to imports.
  3. Run-time helper code for WebAssembly instructions is probably
@@ -888,7 +887,7 @@ JIT techniques to possibly inline representation-specific accessors.
 This is of limited use though for run-time routines with many different
 call sites.
 
-On the reliability and security side, adding strings to WebAssembly
+On the reliability and security side, adding `stringref` to WebAssembly
 removes a significant user of extra-module access to memory.  Because
 the WebAssembly code can pick apart the string itself, that's one fewer
 reason for the WebAssembly module to have to expose its memory.
@@ -904,23 +903,23 @@ the most efficient way possible.
 
 At one level, reference-typed strings don't appear have anything to do
 with the component model.  Because components are specified to not share
-anything, even GC-managed data, we don't expect WebAssembly strings to
-pass across a component boundary in the zero-copy way that this proposal
-has as a design goal.
+anything, even GC-managed data, we don't expect a `stringref` to pass
+across a component boundary in the zero-copy way that this proposal has
+as a design goal.
 
-From the perspective of the component model, WebAssembly strings are
+From the perspective of the component model, reference-typed strings are
 rather an *intra-component* concern.  A component may be composed
 internally of a number of WebAssembly modules, as well as possible host
 facilities such as JavaScript.  The zero-copy properties provided by
-WebAssembly strings apply to the inter-module, intra-component
-boundaries of a program.
+`stringref` apply only to the inter-module, intra-component boundaries
+of a program.
 
 That said, strings in the abstract are an important data type, and
 relate to interface types (a WebAssembly proposal based on the component
-model).  Obviously you will want to be able to use WebAssembly strings
-with interface types.  The shared-nothing design choice of the component
-model then implies that string contents should be copied when they cross
-a component boundary.
+model).  Obviously you will want to be able to use `stringref` with
+interface types.  The shared-nothing design choice of the component
+model then implies that `stringref` contents should be copied when they
+cross a component boundary.
 
 Incidentally, for inter-component interfaces that deal in strings, the
 component model specifies that abstractly, [strings are sequences of
@@ -928,26 +927,26 @@ unicode scalar
 values](https://github.com/WebAssembly/interface-types/issues/135).
 This implies that some JavaScript strings can't traverse a component
 boundary, because of the potential for isolated surrogates, and also
-implies an eager check that a WebAssembly string is valid, for an
-interface-typed call.  In practice this is not a problem because the
-string's contents are being copied anyway and so can be validated at the
-same time.
+implies an eager check that a `stringref` is a valid USV sequence, for
+an interface-typed call.  In practice this is not a problem because the
+`stringref` contents are being copied anyway and so can be validated at
+the same time.
 
 Interface types are used to specify a WebAssembly function's signature
 in an abstract way.  This signature should then be compiled down to a
 concrete adapter function specialized to the data representations used
 by the caller and the callee.  The instruction set in this proposal can
-be used to implement the adapter function for passing stringrefs as
-strings; assuming that the adapter function is generated in such a way
+be used to implement the adapter function for passing a `stringref` as a
+string; assuming that the adapter function is generated in such a way
 that it has access to the target memory, `string.encode` can implement
 the copy and validation at the same time.  `string.new` would be the
-implementation of getting a stringref from an interface-typed string
+implementation of getting a `stringref` from an interface-typed string
 value.
 
 Note that because this proposal can't create strings that are not USV
 sequences, a WebAssembly implementation embedded by a host that also
-can't produce USV strings can avoid any component-model string
+can't produce USV strings can avoid any component-model `stringref`
 validation checks.  This would be the case notably for hosts that use
 UTF-8 as their underlying string representation; passing a stringref to
 an interface-type interface would probably compile down to just a memcpy
-of the stringref's contents.
+of the contents of the `stringref`.
