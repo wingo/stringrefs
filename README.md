@@ -26,18 +26,21 @@ find good compromises are "minimal" and "viable".
  4. Allow string literals in element sections
 
 ## Definitions
- - *codepoint*: an integer in the range [0,0x10FFFF].
- - *surrogate*: a codepoint in the range [0xD800,0xDFFF].
- - *unicode scalar value*: a codepoint that is not a surrogate.
- - *character*: an imprecise concept that we try to avoid in this
+ - *codepoint*: An integer in the range [0,0x10FFFF].
+ - *surrogate*: A codepoint in the range [0xD800,0xDFFF].
+ - *unicode scalar value*: A codepoint that is not a surrogate.
+ - *character*: An imprecise concept that we try to avoid in this
     document.
- - *code unit*: a codepoint in the range [0,0xFFFF].
- - *high surrogate*: a surrogate in the range [0xD800,0xDBFF].
- - *low surrogate*: a surrogate which is not a high surrogate.
- - *surrogate pair*: a sequence of a *high surrogate* followed by a *low
+ - *code unit*: An indivisible unit of an encoded unicode scalar value.
+    For UTF-8 encodings, an integer in the range [0,0xFF] (a byte); for
+    UTF-16 encodings, an integer in the range [0,0xFFFF]; for UTF-32,
+    the unicode scalar value itself.
+ - *high surrogate*: A surrogate in the range [0xD800,0xDBFF].
+ - *low surrogate*: A surrogate which is not a high surrogate.
+ - *surrogate pair*: A sequence of a *high surrogate* followed by a *low
     surrogate*, used by UTF-16 to encode a codepoint in the range
     [0x10000,0x10FFFF].
- - *isolated surrogate*: any surrogate which is not part of a surrogate
+ - *isolated surrogate*: Any surrogate which is not part of a surrogate
     pair.
 
 ## Design
@@ -52,20 +55,14 @@ of implications.
 JS strings are immutable, so WebAssembly strings should also be
 immutable.
 
-#### No `get-char-at` method
-
-A JavaScript string stores its length in code units, not unicode scalar
-values.  In the general case, getting the *n*th USV from a string
-requires parsing all preceding code units.  We would not want to design
-an API that would encourage straightforward uses (e.g. looping over
-characters) to run in quadratic time.
-
 #### Polymorphism
 
 JS engines typically represent strings in many different ways: strings
-which are "narrow" (one byte per code unit) or "wide" (two bytes), rope
-strings or not, string slices or not, and external or not.  That's at
-least 16 different kinds of strings.
+which are "narrow" (in which all code units are in [0,0xFF] and can use
+a fixed-width encoding with only one byte per code unit) or "wide" (two
+bytes per code unit, 1 or 2 code units per codepoint), rope strings or
+not, string slices or not, and external or not.  That's at least 16
+different kinds of strings.
 
 JavaScript can mitigate this polymorphism to a degree via adaptive
 compilation, which can devirtualize based on the kind of strings seen at
@@ -136,16 +133,28 @@ If we were just considering simplicity, the best solution would be to
 say "strings are sequences of unicode scalar values", but we know that
 for JavaScript this is not the case.
 
-However, we think we can get closer to the simple solution by only
-including interfaces that treat strings as USV sequences, for example by
-only including routines that access string contents in terms of UTF-8,
-UTF-16, and other valid Unicode encodings that exclude isolated
-surrogates by construction.  Isolated surrogates are rare in JavaScript
-and the tail should not wag the dog.
+However, we think we can get closer to the simple solution by primarily
+working in terms of unicode scalar values.  WebAssembly on its own
+should not be able to create strings with isolated surrogates, and
+therefore we should only include support for reading and writing
+standard Unicode encoding schemes which exclude isolated surrogates by
+construction, for example UTF-8 and UTF-16.  Isolated surrogates are
+rare in JavaScript and the tail should not wag the dog.
 
-It could be that we're wrong, though, and so we'd need to leave the door
-open to add interfaces that access string contents using more general
-encodings such as WTF-8.
+Such problematic strings can come from a host, however, and where it is
+as simple to define a behavior as to require an implementation to trap,
+we will lean towards defined non-trapping behavior.  The proposal also
+leaves the door open to add interfaces that access string contents using
+more general encoding schemes such as WTF-8 if needed in the future.
+
+#### No `get-char-at` method
+
+A JavaScript string is composed of a sequence of 16-bit code units which
+encode a sequence of codepoints, in which each codepoint corresponds to
+1 or 2 code units.  In the general case, getting the *n*th unicode
+scalar value from a string requires parsing all preceding code units.
+We would not want to design an API that would encourage straightforward
+uses (e.g. looping over unicode scalar values) to run in quadratic time.
 
 ### Oracle: JS engine C++ API
 
@@ -306,11 +315,30 @@ value of 0 denotes the string start (before the first USV).  It follows
 that 0 may also denote the end of the string also, for zero-length
 strings.
 
-The specific mapping from USV offset to cursor value is
-implementation-defined.  It may be that specific embeddings may give
-cursor values a meaning: for example, a JS embedding may specify that a
-cursor is a code unit offset, or a UTF-8-only embedding may use byte
-offsets.
+A cursor value is an offset into a string.  Cursors uniquely identify a
+position in a string, and are ordered, and therefore can be compared
+against each other.
+
+If a host represents strings internally using UTF-8, UTF-16, or UTF-32,
+or a variant thereof such as the one used in JavaScript, cursor values
+are code unit offsets.
+
+For example, because JavaScript hosts have to represent strings as
+(logical) sequences of 16-bit code units, a WebAssembly string cursor
+for a WebAssembly implementation embedded in a web browser will be a
+code unit offset (the same as the operand to JavaScript's
+[`String.prototype.charCodeAt`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/charCodeAt).
+
+For a WebAssembly implementation that represents strings as UTF-8
+internally, cursor values are byte offsets.  The intention is that
+accessing content in a string with a cursor has the least possible
+overhead.  This also allows hosts to communicate string positions with
+WebAssembly programs.
+
+If a host does not represent strings using a unicode encoding scheme,
+the specific mapping from USV offset to cursor value is
+implementation-defined, with the requirement that values be ordered and
+that each position must have one and only one cursor value.
 
 To move a cursor to a new position, use the `string.advance` and
 `string.rewind` seek instructions.
@@ -356,8 +384,8 @@ trap.
 
 Given that there must be a distinct cursor value for each codepoint in a
 string, and one for the end, this constrains the strings that are
-processed by to a maximum of 2<sup>31</sup>–1 codepoints.  Not all
-strings have packed cursor values, so the codepoint size limit in
+processed by to a maximum of 2<sup>31</sup>–1 code units.  Not all
+strings have one code unit per codepoint, so the codepoint size limit in
 practice may be lower for any given string.  This specification can
 therefore represent codepoint counts with an `i32` without risk of
 overflow.
@@ -369,8 +397,8 @@ may allow for 64-bit variants of the cursor-using instructions, which
 could relax these restrictions.
 
 In practice, no web browser embedding allows for strings longer than
-2<sup>31</sup>–1 code units, so no string from JavaScript is out of
-range for the instructions in this proposal.
+2<sup>31</sup>–1 UTF-16 code units, so no string from JavaScript is too
+large for the instructions in this proposal.
 
 ### Accessing string contents
 
@@ -690,43 +718,76 @@ https://github.com/guybedford/proposal-is-usv-string
 
 Assuming that the non-browser implementation uses UTF-8 as the native
 string representation, then a stringref is a pointer, a length, and a
-reference count.  A cursor is a byte offset into the string.  Cursor
-validation is ensuring the cursor is less than or equal to the string
-byte length, and that `(ptr[cursor] & 0x80) == 0`.  Measuring UTF-8
-encodings is just length minus the cursor.  Measuring UTF-16 would be
-via a callout.  Encoding UTF-8 is just `memcpy`.
+reference count.  The specification requires that cursor values be UTF-8
+code unit offsets, which are byte offsets from the beginning of the
+string.  Cursor validation is ensuring the cursor is less than or equal
+to the string byte length, and that `(ptr[cursor] & 0xb0) != 0x80`.
+Measuring UTF-8 encodings is just length minus the cursor.  Measuring
+UTF-16 would be via a callout.  Encoding UTF-8 is just `memcpy`.
 
 ### What's the expected implementation in web browsers?
 
-We expect that web browsers use JS strings as `stringref`.  We expect a
-cursor to be a code unit offset.  Seeking, measuring, encoding, and
-equality predicates would call out to run-time functions that would
-dispatch over polymorphic values.  The support for one-byte encodings
-may prove to be a performance benefit also.
+We expect that web browsers use JS strings as `stringref`.  The
+specification then requires that cursor values be UTF-16 code unit
+offsets.  Seeking, measuring, encoding, and equality predicates would
+likely call out to run-time functions that would dispatch over
+polymorphic values.  The support for one-byte encodings may prove to be
+a performance benefit also.
 
-### The meaning of string cursor values is implementation-defined?!?
+### Why define string cursors in terms of the host's string representation?
 
-It's a compromise.  We really want to support efficient access to
-JavaScript strings, but we don't want to expose the idea of iterating
-JavaScript strings in terms of code units, because of non-web
-embeddings.  So we iterate instead in terms of unicode scalar values,
-with defined exceptional behavior if there are isolated surrogates.  But
-mapping USV offset to code unit offset is O(n) -- so we need cursors
-somehow to avoid quadratic algorithms.
+The purpose of a string cursor is to allow efficient access to string
+contents, starting at a specific position.
 
-The question is to answer is, should we expose cursors as i32 values
-that the user can see, or keep them opaque in a new type?  Opaque
-cursors could avoid checks in some cases and would hide
-implementation-defined differences.  But if strings are processed in
-chunks, cursor validity check overhead is likely to be low relative to
-overall program time.  So it's just a tradeoff then between exposing
-implementation-defined cursor values, versus the cognitive/spec overhead
-of having to define an opaque cursor type.  After going back and forth
-on this multiple times, it would seem that i32 cursors are a workable
-local maximum.
+Under the hood, string cursors must relate to host string
+representation.  For example, we really want to support efficient access
+to JavaScript strings, so string cursors in a web browser should express
+positions in terms of UTF-16 code unit offsets.  But we don't want
+WebAssembly strings to be specified in terms of UTF-16 only; non-web
+embeddings will likely represent strings internally using other
+encodings (often UTF-8).  So instead we advance cursors in units of
+unicode scalar values, with some allowances for isolated surrogates from
+JavaScript.  But we can't define string cursors as being USV offsets,
+because mapping USV offset to code unit offset is O(n).  Cursors allow
+us to avoid quadratic algorithms.
 
-See https://github.com/wingo/wasm-strings/issues/6 for a full
-discussion.
+The question then becomes, because cursor values relate to a host's
+string representation, should we hide the details of what a string
+cursor is from users, in the name of abstraction and common defined
+behavior?
+
+All things being equal, it would have been nice to define string cursors
+in such a way that a program running on a UTF-8 host would behave
+exactly the same as for a UTF-16 host.  We could have provided this
+property by making string cursors opaque.  This could have gone two
+ways: if we made cursors a first-class reference-typed value, cursors
+could hold a reference to their strings directly.  There would then be
+no need for cursor validity checks.  On the other hand, then we would
+have a new type that would infiltrate everything, from implementation to
+JavaScript API to the type system and so on.  And, absent compiler
+heroics, reference-typed cursors may cause high allocation overheads.
+
+The other way you could make cursors opaque would be as opaque scalar
+values.  The idea is that a cursor is really an `i32` under the hood,
+but its value isn't accessible.  Such a cursor wouldn't stand alone in
+the way reference-typed cursors would: you need to pass a string and a
+cursor to instructions, and you need to check the cursor for validity
+with regards to the string.  We still have some of the type profusion
+issues from a "cognitive load" point of view.  But, you couldn't observe
+the difference in cursor values between implementations, which would be
+a nice property.
+
+In the end though, besides simplicity, what tipped the balance towards
+plain `i32` values was precisely that string cursors could be meaningful
+to the host instead of opaque.  A host should be able to reason about
+string positions and communicate those positions to WebAssembly -- after
+all, the strings belong to the host too.  Specifying that string cursors
+are code unit offsets makes this possible, while also constraining
+e.g. WebAssembly implementations in different web browsers to all use
+the same notion of string offsets.
+
+See https://github.com/wingo/wasm-strings/issues/6 and
+https://github.com/wingo/wasm-strings/issues/11 for a full discussion.
 
 ### Are stringrefs nullable?
 
@@ -772,10 +833,3 @@ That said though, any copy is likely to remain in cache, amortizing the
 cost of the second access.  Inlining the (likely) UTF-8 accesses on the
 WebAssembly side seems more important than preventing a copy by using a
 codepoint-by-codepoint non-copying interface.
-
-### What are the size limits on a string?
-
-This is probably something for the
-[embedding](https://webassembly.github.io/spec/js-api/index.html#limits)
-to specify.  I would guess that codepoint lengths in [0,2^32-1] should
-be the limit from the POV of the core spec.
