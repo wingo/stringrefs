@@ -903,16 +903,16 @@ the most efficient way possible.
 
 At one level, reference-typed strings don't appear have anything to do
 with the component model.  Because components are specified to not share
-anything, even GC-managed data, we don't expect a `stringref` to pass
-across a component boundary in the zero-copy way that this proposal has
-as a design goal.
+anything, even GC-managed data, zero-copy communication of
+reference-typed strings between components is strictly out of scope
+(though this operation may be zero-copy in practice; see below).
 
 From the perspective of the component model, reference-typed strings are
 rather an *intra-component* concern.  A component may be composed
 internally of a number of WebAssembly modules, as well as possible host
 facilities such as JavaScript.  The zero-copy properties provided by
-`stringref` apply only to the inter-module, intra-component boundaries
-of a program.
+`stringref` are only assured on to the inter-module, intra-component
+boundaries of a program.
 
 That said, strings in the abstract are an important data type, and
 relate to interface types (a WebAssembly proposal based on the component
@@ -942,6 +942,17 @@ that it has access to the target memory, `string.encode` can implement
 the copy and validation at the same time.  `string.new` would be the
 implementation of getting a `stringref` from an interface-typed string
 value.
+
+Of course, because a `stringref` is immutable, whether it is copied or
+not on a component boundary or during a call to an interface-typed
+function is an implementation detail.  Some implementations of the
+component model may wish to copy in all cases, for memory usage
+accounting reasons.  Others will apply a zero-copy strategy when
+possible, for example when both the caller and the callee of an
+interface are implemented with `stringref`.  In the zero-copy case,
+however, hosts whose strings may contain isolated surrogates would have
+to eagerly verify that the string is a valid USV sequence; see
+[isUSVString](https://github.com/guybedford/proposal-is-usv-string).
 
 Note that because this proposal can't create strings that are not USV
 sequences, a WebAssembly implementation embedded by a host that also
