@@ -212,15 +212,14 @@ includes the following procedural interfaces:
 
  1. Only provide interfaces to create strings from encoded bytes in
     memory.
- 2. Provide for three in-memory encodings of USV sequences: `one-byte`,
-    for values in [0,255], and `utf-8` and `utf-16` (little-endian), for
-    any valid unicode scalar value.
+ 2. Provide for two in-memory encodings of USV sequences: `utf-8` and
+    `utf-16` (little-endian), for any valid unicode scalar value.
  3. Only provide interfaces to access string contents via writing
     encoded bytes to memory.  Use an iterator to avoid eager flattening
     of rope strings.  Support the ability to know how many bytes the
-    encoded data will take, to support precise allocations, to know when
-    the `one-byte` encoding can be used, and to know if a string
-    originating in JavaScript has unpaired surrogates.
+    encoded data will take, to support precise allocations.  This
+    interface can also indicate when a string originating in JavaScript
+    has unpaired surrogates.
  4. Don't provide a `get-usv-at-index` accessor, to avoid O(n) search
     for `utf-8` and `utf-16` backing stores.
  5. When attempting to create a string from an invalid byte sequence or
@@ -242,7 +241,7 @@ given encoding.  Those instructions take an immediate uleb *encoding*
 parameter.
 
 ```
-encoding ::= utf-8 | utf-16 | one-byte
+encoding ::= utf-8 | utf-16
 ```
 
 When reading or writing encoded bytes, the address in memory at which to
@@ -474,13 +473,13 @@ allows you to elide the memory, in which case it defaults to 0.
   string.new utf-8)
 ```
 
-### Make string from one-byte codepoints in memory
+### Make string from an array of UTF-8 code units in memory
 
 ```wasm
-(func $string-from-latin1 (param $ptr i32) (param $len i32) (result stringref)
+(func $string-from-utf8n (param $ptr i32) (param $len i32) (result stringref)
   local.get $ptr
   local.get $len
-  string.new one-byte)
+  string.new utf-8)
 ```
 
 ### Make string from UTF-16 in memory
@@ -730,8 +729,7 @@ We expect that web browsers use JS strings as `stringref`.  The
 specification then requires that cursor values be UTF-16 code unit
 offsets.  Seeking, measuring, encoding, and equality predicates would
 likely call out to run-time functions that would dispatch over
-polymorphic values.  The support for one-byte encodings may prove to be
-a performance benefit also.
+polymorphic values.
 
 ### Why define string cursors in terms of the host's string representation?
 
