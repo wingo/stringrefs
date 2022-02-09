@@ -293,7 +293,7 @@ invalid WTF-8 will trap.  The maximum value for *`bytes`* is
 (string.new_wtf16 $memory ptr:address codeunits:i32)
   -> str:stringref
 ```
-Create a new string from the *`len`* code units encoded in memory at
+Create a new string from the *`codeunits`* code units encoded in memory at
 *`ptr`*.  Out-of-bounds access will trap.  *`ptr`* must be two-byte
 aligned, and will trap otherwise.  The maximum value for *`codeunits`*
 is 2<sup>30</sup>–1; passing a higher value traps.
