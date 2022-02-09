@@ -337,7 +337,7 @@ even if the string size is formally within the limits.  However
 
 ### String positions
 
-The most optimal way to represent a position in a string is in terms of
+The optimal way to represent a position in a string is in terms of
 code units in the encoding used internally by the WebAssembly run-time.
 However we have to allow both for implementations that use WTF-8 and for
 those that use WTF-16.  Also, some source languages will want to use
