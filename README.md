@@ -449,8 +449,7 @@ result will be a valid codepoint, and may be an isolated surrogate.  If
 Return the WTF-16 code unit at the WTF-16 *`pos`* in *`str`*, as an i32.
 The result may be part of a surrogate pair, or may be an isolated
 surrogate; the caller is responsible for decoding to codepoints as
-needed.  If *`pos`* is greater than or equal to the result of
-`string.end_wtf16` for *`str`*, trap.
+needed.  If *`pos`* is at the end of *`str`*, the result is -1.
 
 ```
 (string.measure_utf8 str:stringref pos:i32 codepoints:i32)
