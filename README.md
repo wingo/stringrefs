@@ -340,11 +340,12 @@ even if the string size is formally within the limits.  However
 The optimal way to represent a position in a string is in terms of
 code units in the encoding used internally by the WebAssembly run-time.
 However we have to allow both for implementations that use WTF-8 and for
-those that use WTF-16.  Also, some source languages will want to use
-WTF-16 offsets.
+those that use WTF-16.  Also, some source languages will want to denote
+string positions as WTF-16 code unit offsets.
 
 As a compromise, we allow string positions to be expressed as `i32`
-values, either in terms of WTF-8 code units or in WTF-16 code units.
+values, either in terms of WTF-8 code units (bytes) or in WTF-16 code
+units.
 
 WTF-8 and WTF-16 positions have different semantics:
 
@@ -369,9 +370,11 @@ strictly ordered, and therefore can be compared against each other.
 
 We expect WebAssembly implementations to represent strings using either
 WTF-8 or WTF-16, and thus one of these encodings is "native" and the
-other is "foreign".  Some implementations will want to use
+other is "foreign".  In the limit case, a linear search may be necessary
+to map a foreign position to a native position.  Some implementations
+will want to use
 [breadcrumbs](https://www.swift.org/blog/utf8-string/#breadcrumbs) to
-project foreign positions to native positions.  A simple one-entry cache
+perform this mapping in near-constant time.  A simple one-entry cache
 may also suffice for some implementations.  Finally, we expect that many
 source languages will process strings in chunks via in-memory encoding,
 minimizing per-codepoint translation cost between foreign and native
@@ -478,9 +481,9 @@ total code unit length, and any position slice in that range is valid
 and has a well-defined mapping to bytes.
 
 ```
-(string.encode_utf8 str:stringref pos:i32 bytes:i32)
+(string.encode_utf8 str:stringref pos:i32 ptr:address bytes:i32)
   -> bytes:i32
-(string.encode_wtf8 str:stringref pos:i32 bytes:i32)
+(string.encode_wtf8 str:stringref pos:i32 ptr:address bytes:i32)
   -> bytes:i32
 ```
 
@@ -898,24 +901,23 @@ implementations that use WTF-8 internally.
 
 We expect that compilers that emit the WTF-16 interface place more
 importance on `string.get_wtf16`.  Implementations should ensure that
-`string.get_wtf16` runs in near-linear time, even on systems that
+`string.get_wtf16` runs in near-constant time, even on systems that
 represent strings internally as WTF-8.
 
 ### Could abstract the concept of a string position?
 
 The question is, if we see strings as sequences of codepoints that can
-be seeked around in, what if we defined an abstract time for a cursor
+be seeked around in, what if we defined an abstract type for a cursor
 into a string?  Such a cursor could hold onto the string and so avoid
 any need for position validation, and could abstract over the
-differences between implementations that use WTF-8 or WTF-16
-internally.
+differences between implementations that use WTF-8 or WTF-16 internally.
 
 One consideration is that whatever we do, some source languages will
 need WTF-16 codepoint access (`string.get_wtf16`).  This makes abstract
 cursors less attractive because they are not comprehensive.  Abstract
 cursors could replace uses of WTF-8 string positions which are really
 about accessing the codepoints of a string and only incidentally about
-UTF-8.
+WTF-8.
 
 Defining a string cursor type is tricky though -- would you allow them
 to be stored to globals?  Passed as parameters?  To JavaScript?  How
