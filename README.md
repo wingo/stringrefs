@@ -22,9 +22,9 @@ find good compromises are "minimal" and "viable".
  1. Zero-copy passing of strings from JavaScript to WebAssembly & back
  2. No new string implementations on the web: allow re-use of JS
     engine's strings
- 3. Allow UTF-8-only implementation for non-web WebAssembly
-    implementations
- 4. Allow WTF-16 support for Java, Dart, Kotlin and similar languages
+ 3. Allow WebAssembly implementations to efficiently represent strings
+    internally in either WTF-8 or WTF-16 encodings
+ 4. Allow access to WTF-16 code units for Java, Dart, Kotlin and similar languages
  5. Allow string literals in element sections
 
 ## Definitions
