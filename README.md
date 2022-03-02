@@ -9,8 +9,8 @@ Andy Wingo `<wingo@igalia.com>`
 
 ## Goals
 
- 1. Enable C++/WebAssembly programs to efficiently create and consume
-    JavaScript strings
+ 1. Enable programs compiled to WebAssembly to efficiently create and
+    consume JavaScript strings
  2. Provide a good string implementation that many languages implemented
     on top of the GC proposal would find useful
 
@@ -75,11 +75,11 @@ fast.
 
 At the same time, when looping over codepoints in a string, you would
 really like your WebAssembly to inline its accessors and iterators.
-Therefore we will lean away from interfaces that encourage one or more
-string instruction per character, and instead will encourage encoding
-(sub-)strings to UTF-8 in memory and operating over those chunks.
+Therefore we will provide interfaces that encourage processing string
+contents in chunks, by encoding sequences of codepoints to UTF-8, WTF-8,
+or WTF-16 in memory.
 
-### JavaScript interoperability and surrogates
+#### JavaScript interoperability and surrogates
 
 The `stringref` proposal has to consider surrogates because we want
 WebAssembly strings to have good interoperation with JavaScript, whose
@@ -150,8 +150,8 @@ codepoints in the [WTF-16](https://simonsapin.github.io/wtf-8/) encoding
 -- so not just a sequence of unicode scalar values, but actually any
 codepoint, including isolated surrogates.
 
-Therefore this proposal defines WebAssembly strings as sequences of
-codepoints, including isolated surrogates.  Encoding a WebAssembly
+Therefore **this proposal defines WebAssembly strings as sequences of
+codepoints, including isolated surrogates**.  Encoding a WebAssembly
 string to UTF-8 may fail, as UTF-8 is a proper Unicode encoding scheme
 that excludes isolated surrogates.  Languages that choose to process
 strings in UTF-8 chunks can decide what to do for these somewhat
@@ -162,21 +162,59 @@ encodings, for languages that can handle any codepoint sequence.  For
 languages that want to address strings in terms of 16-bit code units are
 generally tolerant to isolated surrogates.
 
-We will provide the ability to denote string positions in WTF-8 or
-WTF-16 offsets.  We provide interfaces to advance WTF-8 string positions
-by units of codepoints (rather than code units), and assume that WTF-16
-users prefer code units.  Whether to use WTF-8 or WTF-16 is more a
-property of the source language; some compilers and language runtimes
-will prefer one encoding or the other.
+### Encodings and views
 
-#### No `get-nth-codepoint` method
+There is an impedance-matching problem between the way that WebAssembly
+implementations want to represent strings, and the way that source
+languages will want to represent strings.  The stringref API has to do
+the best it can to smooth over these differences.
 
-A JavaScript string is composed of a sequence of 16-bit code units which
-encode a sequence of codepoints, in which each codepoint corresponds to
-1 or 2 code units.  In the general case, getting the *n*th codepoint
-from a string requires parsing all preceding code units.  We would not
-want to design an API that would encourage straightforward uses
-(e.g. looping over codepoints) to run in quadratic time.
+On the implementation side, some WebAssembly implementations will want
+to represent string contents in the WTF-16 encoding, notably
+implementations embedded on the web because of JavaScript's usage of
+WTF-16.  Other implementations without legacy requirements will want to
+use WTF-8, as it is generally more space-efficient and closer to the
+common UTF-8 interchange format.
+
+From the source language side, some source languages such as Java will
+also want to consider strings as WTF-16 code unit sequences.  Other
+source languages will want to think of strings as WTF-8 byte sequences,
+and others will want to think of strings as codepoint sequences.
+
+On the most basic level, when a source language wants to access string
+contents, it can encode the whole string to memory (or eventually to a
+GC-managed array) as UTF-8, WTF-8, or WTF-16, depending on the source
+language's needs.  For example Java usually wants to treat strings as
+WTF-16 code unit sequences, so Java would encode to WTF-16.  This
+proposal provides facilities for measuring how many bytes an encoding
+would take, and actually doing the encoding.
+
+As a possibly post-MVP feature we also would also like to provide the
+ability to get a WTF-8 or WTF-16 "view" on a string, which should
+provide near-constant-time random access to the bytes of a WTF-8
+encoding of the string, or to the 16-bit code units of a WTF-16 encoding
+of a string.  We also provide a view that allows forward access to the
+codepoints in a string.
+
+An implementation using WTF-8 will have some costs for source languages
+that want WTF-16, and vice versa.  All implementations will have trouble
+with codepoint sequences, as no implementation will represent strings as
+UTF-32 (WTF-32 is not defined, though it could be).
+
+Getting a view for a WebAssembly's "native" string encoding is likely a
+constant-time operation, and possibly even free.  For example, getting a
+WTF-8 view for an implementation that uses WTF-8 to represent strings
+will be free.  Getting a WTF-16 view on a WTF-8 implementation could
+imply a copy, or possibly the computation of a
+[breadcrumbs](https://www.swift.org/blog/utf8-string/#breadcrumbs)
+table.
+
+This proposal defines positions in strings only with respect to a
+specific string view type.  Any interface that needs to refer to a
+position in a string should take a string view and an offset whose
+meaning depends on the string view type: a byte offset for a WTF-8
+string view, a code unit offset for a WTF-16 view, or a codepoint offset
+for a codepoint view.
 
 ### Oracle: JS engine C++ API
 
@@ -229,42 +267,26 @@ includes the following procedural interfaces:
 
 ## Proposal
 
-We strike a compromise between three goals:
+This proposal includes a basic `stringref` facility, and a (possibly
+post-MVP) `stringview` facility.
 
- - Support WTF-16, for Java
- - Allow implementations to represent strings as WTF-8
- - Allow source languages to choose policy for invalid UTF-8
+The `stringref` facility defines a new reference type, `stringref`.
+Literal stringref values can be embedded in a WebAssembly module, with
+their contents taken from a new section.  WebAssembly programs can also
+create `stringref` values from data encoded in memory or GC arrays in
+the WTF-8 or WTF-16 encodings, and can likewise write `stringref`
+contents to memory in these encodings.  There is an instruction to
+concatenate `stringref` values.  Finally, `stringref` values can be
+compared for equality.
 
-Concretely, we propose to:
+The `stringview` facility allows WebAssembly to obtain a "view" on the
+contents of a `stringref`, treating it as a sequence of values in the
+WTF-8 and WTF-16 encodings, as well as treating a string as a sequence
+of codepoints.  WebAssembly programs can use stringviews to encode parts
+of strings to memory, access string contents by index, and to take
+substrings.
 
- 1. Provide interfaces to create strings from encoded bytes in memory.
- 2. Provide three in-memory encodings of codepoint sequences: `utf-8`,
-    `wtf-8`, and `wtf-16` (little-endian).  The `utf-8` encoding can
-    only encode codepoints which are valid unicode scalar values; the
-    other two encodings can encode any codepoint, including isolated
-    surrogates.
- 3. Provide interfaces to access string contents via writing encoded
-    bytes to memory.  Avoid eager flattening of rope strings.  Support
-    the ability to know how many bytes the encoded data will take, to
-    support precise allocations.  Allow for encoding failure for the
-    strict `utf-8` encoding.
- 4. Denote positions in strings in code units with respect to particular
-    encodings.  For WTF-8/UTF-8, this is bytes, and only some positions
-    are valid.  For WTF-16, this is 16-bit code units, and any position
-    within the string's bounds is valid.  Provide interface to advance a
-    string position by a number of codepoints.  See discussion below.
- 5. Provide a `get-wtf-16-code-unit-at-offset` primitive, to support
-    languages whose strings are 16-bit code units, even for
-    implementations that store strings as WTF-8.
- 6. When attempting to create a string from an invalid code unit
-    sequence or when encoding bytes from a string fails, trap.
- 7. Provide `concatenate` and `slice` interfaces.  Note that for strings
-    that are not valid unicode scalar value sequences, `concatenate` may
-    join isolated surrogates.  `slice` takes two string positions as
-    arguments, and thus exists in WTF-8/UTF-8 and WTF-16 variants.  The
-    WTF-16 `slice` may create dangling surrogates.
-
-## Instruction set
+## The `stringref` facility
 
 One new reference type: `stringref`.  Opaque, like `externref` and
 `funcref`.
@@ -302,10 +324,10 @@ is 2<sup>30</sup>–1; passing a higher value traps.
 
 Creating a string is a form of dynamic allocation and can fail.  The
 same implementation running on different machines can have different
-behaviors.  The specification can only say that byte sizes above a
-certain limit *must* fail; but for byte sizes within the limits, the
-allocations *may* fail.  If an allocation fails, the implementation
-must trap.  Fallible `string.new` is a possible future extension.
+behaviors.  The specification can only say that byte/code-unit sizes
+above a certain limit *must* fail; but for sizes within the limits, the
+allocations *may* fail.  If an allocation fails, the implementation must
+trap.  Fallible `string.new` is a possible future extension.
 
 ### String literals
 
@@ -335,192 +357,227 @@ module with string literals may fail due to lack of memory resources,
 even if the string size is formally within the limits.  However
 `string.const` itself never traps when passed a valid literal offset.
 
-### String positions
-
-The optimal way to represent a position in a string is in terms of
-code units in the encoding used internally by the WebAssembly run-time.
-However we have to allow both for implementations that use WTF-8 and for
-those that use WTF-16.  Also, some source languages will want to denote
-string positions as WTF-16 code unit offsets.
-
-As a compromise, we allow string positions to be expressed as `i32`
-values, either in terms of WTF-8 code units (bytes) or in WTF-16 code
-units.
-
-WTF-8 and WTF-16 positions have different semantics:
-
- * WTF-8 positions address codepoints.  A string consisting of *N*
-   codepoints will have *N*+1 distinct valid WTF-8 position values: one
-   before each codepoint, and one at the end.  A position value of 0
-   denotes the string start (before the first codepoint).  It follows
-   that 0 may also denote the end of the string also, for zero-length
-   strings.
-
- * WTF-16 positions address 16-bit code units.  A string consisting of
-   *N* code units when encoded as WTF-16 will have *N*+1 distinct valid
-   position: one before each 16-bit code unit, and one at the end.  As
-   with WTF-8 positions, 0 denotes the string start.  There may be more
-   WTF-16 positions in a string than there are WTF-8 positions, as
-   there may be multiple WTF-16 code units per codepoint.
-   A WTF-16 position is the same as the operand to JavaScript's
-   *[`String.prototype.charCodeAt`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/charCodeAt).
-
-A position is an offset into a string's contents.  Positions are
-strictly ordered, and therefore can be compared against each other.
-
-We expect WebAssembly implementations to represent strings using either
-WTF-8 or WTF-16, and thus one of these encodings is "native" and the
-other is "foreign".  In the limit case, a linear search may be necessary
-to map a foreign position to a native position.  Some implementations
-will want to use
-[breadcrumbs](https://www.swift.org/blog/utf8-string/#breadcrumbs) to
-perform this mapping in near-constant time.  A simple one-entry cache
-may also suffice for some implementations.  Finally, we expect that many
-source languages will process strings in chunks via in-memory encoding,
-minimizing per-codepoint translation cost between foreign and native
-offsets.
-
-For WTF-16 positions, since position values are packed, we just provide
-an accessor to get the last position in the string:
-
-```
-(string.end_wtf16 str:stringref)
-  -> pos:i32
-```
-Return the position after the last code unit in the WTF-16 encoding of
-the string *str*.
-
-For WTF-8 positions, use the `string.advance_wtf8` and
-`string.rewind_wtf8` seek instructions:
-
-```
-(string.advance_wtf8 str:stringref pos:i32 codepoints:i32)
-  -> pos:i32, codepoints:i32
-(string.rewind_wtf8 str:stringref pos:i32 codepoints:i32)
-  -> pos:i32, codepoints:i32
-```
-Return a new WTF-8 position for the string *`str`* which is
-*`codepoints`* codepoints after or before *`pos`*.  Also return the
-number of codepoints by which the new position differs from the old,
-which may be less than the *`codepoints`* parameter if end-of-string or
-beginning-of-string would be reached.  The *`codepoints`* argument is
-interpreted as a `u32`.
-
-#### Invalid position values
-
-All instructions which take string positions trap if the position is not
-valid for the given string.
-
-#### Position value limits
-
-The maximum valid `i32` position value is 2<sup>31</sup>.
-
-Evaluation of an instruction which would result in a WTF-16 position
-value greater than 2<sup>31</sup> must trap.  In practice, no web
-browser embedding allows for strings longer than 2<sup>31</sup>–1 WTF-16
-code units, so no string from JavaScript is too large for the
-instructions in this proposal, when processed as WTF-16.
-
-Evaluation of an instruction which would result in a WTF-8 position
-value greater than 2<sup>31</sup> must trap.  Note that depending on the
-string contents, a position for a WTF-8 encoding may be numerically
-lesser or greater than the corresponding WTF-16 position.
-
-Future extensions of the `stringref` proposal along the lines of the
-[memory64
-proposal](https://github.com/WebAssembly/memory64/blob/main/proposals/memory64/Overview.md)
-may allow for 64-bit variants of the position-using instructions, which
-could relax these restrictions.
-
 ### Accessing string contents
 
 All parameters and return values measuring a number of codepoints or a
 number of code units represent these sizes as unsigned values.
 
 ```
-(string.get_wtf8 str:stringref pos:i32)
-  -> codepoint:i32
-```
-Return the codepoint at the WTF-8 *`pos`* in *`str`*, as an i32.  The
-result will be a valid codepoint, and may be an isolated surrogate.  If
-*`pos`* is at the end of *`str`*, the result is -1.
-
-```
-(string.get_wtf16 str:stringref pos:i32)
-  -> codeunit:i32
-```
-Return the WTF-16 code unit at the WTF-16 *`pos`* in *`str`*, as an i32.
-The result may be part of a surrogate pair, or may be an isolated
-surrogate; the caller is responsible for decoding to codepoints as
-needed.  If *`pos`* is at the end of *`str`*, the result is -1.
-
-```
-(string.measure_utf8 str:stringref pos:i32 codepoints:i32)
+(string.measure_utf8 str:stringref)
   -> bytes:i32
-(string.measure_wtf8 str:stringref pos:i32 codepoints:i32)
+(string.measure_wtf8 str:stringref)
+  -> bytes:i32
+(string.measure_wtf16 str:stringref)
   -> bytes:i32
 ```
 Measure how many bytes would be necessary to encode the contents of the
-string *`str`*, starting at position *`pos`*, to UTF-8 or WTF-8
-respectively, limited to *`codepoints`*.  For `string.measure_utf8`, if
-the *`codepoints`* following *`pos`* contain an isolated surrogate,
+string *`str`* to UTF-8, WTF-8, or WTF-16 respectively.  For
+`string.measure_utf8`, if the string contains an isolated surrogate,
 return -1.
 
-The maximum number of bytes returned by `string.measure` is
+The maximum number of bytes returned by these instructions is
 2<sup>31</sup>-1.  If an encoding would require more bytes, it is as if
 the contents can't be encoded at all (the return value is -1).
 
-(Note that the limit on position values constrains strings to have a
-maximum of 2<sup>31</sup>–1 codepoints, but it may be that such a string
-could exceed even 2<sup>32</sup> bytes in a given encoding; e.g. a
-string of 2<sup>31</sup>-1 `\uFFFF` codepoints would require
-2<sup>32</sup>+2<sup>31</sup>-3 bytes when encoded as UTF-8.)
-
-There is no `string.measure_wtf16`; `string.end_wtf16` provides the
-total code unit length, and any position slice in that range is valid
-and has a well-defined mapping to bytes.
-
 ```
-(string.encode_utf8 str:stringref pos:i32 ptr:address bytes:i32)
-  -> bytes:i32
-(string.encode_wtf8 str:stringref pos:i32 ptr:address bytes:i32)
-  -> bytes:i32
+(string.encode_utf8 $memory str:stringref ptr:address)
+(string.encode_wtf8 $memory str:stringref ptr:address)
+(string.encode_wtf16 $memory str:stringref ptr:address)
 ```
-
-Encode the contents of the string *`str`* as UTF-8 or WTF-8,
-respectively, starting at the WTF-8 byte offset *`pos`*, to memory at
-*`ptr`*, limited to *`bytes`* bytes.  Return the number of bytes
-written.  Note that no `NUL` terminator is ever written.  If any
-codepoint cannot be encoded, trap.
+Encode the contents of the string *`str`* as UTF-8, WTF-8, or WTF-16,
+respectively, to memory at *`ptr`*.  The number of bytes written will be
+the same as returned by the corresponding `string.measure_*encoding*`.
+Note that no `NUL` terminator is ever written.  For
+`string.encode_utf8`, trap if the string contains an isolated surrogate.
 
 The maximum number of bytes that can be encoded at once by
 `string.encode` is 2<sup>31</sup>-1.  If an encoding would require more
 bytes, it is as if the codepoints can't be encoded (a trap).
 
+### Concatenation
+
 ```
-(string.encode_wtf16 str:stringref pos:i32 codeunits:i32)
+(string.concat a:stringref b:stringref) -> stringref
 ```
-Encode the *`codeunits`* code units of the string *`str`* as WTF-16,
-respectively, starting at the WTF-16 code unit offset *`pos`*, to memory
-at *`ptr`*.  *`pos`*+*`codeunits`* must be a valid position in *`str`*.
+Return a new stringref containing the codepoints from *`a`* followed by
+the codepoints from *`b`*.
+
+Note that the implementation should take care when, at any future time,
+treating the resulting string as a sequence of codepoints.  If *`a`*'s
+last codepoint is a high surrogate and *`b`*'s first codepoint is a low
+surrogate, these two codepoints combine into one, as if they were the
+two code units of a UTF-16-encoded unicode scalar value.
+
+Concatenating two strings is a form of dynamic allocation and can fail.
+If an allocation fails, the implementation must trap.  Fallible
+`string.concat` is a possible future extension.
 
 ### Predicates
 
 ```
-(string.eq_wtf8 a:stringref a-pos:i32 b:stringref b-pos:i32 codepoints:i32) -> i32
+(string.eq a:stringref b:stringref) -> i32
 ```
 Return 1 if the strings *`a`* and *`b`* contain the same codepoint
-sequence, starting at the WTF-8 positions *`a-pos`* and *`b-pos`*
-respectively, limited to comparing up to *`codepoints`* codepoints.
-Return 0 otherwise.
+sequence.  Return 0 otherwise.
 
 ```
-(string.eq_wtf16 a:stringref a-pos:i32 b:stringref b-pos:i32 codeunits:i32) -> i32
+(string.is_usv_sequence str:stringref)
+  -> bool:i32
+``
+Return 1 if the string *`str`* is a sequence of unicode scalar values,
+and 0 otherwise.  A 0 result indicates that *`str`* contains isolated
+surrogates.
+
+## The `stringview` facility
+
+Three new reference types: `stringview_wtf8`, `stringview_wtf16`, and
+`stringview_iter`.  Opaque, like `externref` and `funcref`.
+
+### `stringview_wtf8`
+
 ```
-Return 1 if the strings *`a`* and *`b`* contain the same WTF-16 code
-unit sequence, starting at positions *`a-pos`* and *`b-pos`*
-respectively, limited to comparing up to *`codeunits`* code units.
-Return 0 otherwise.
+(string.as_wtf8 str:stringref)
+  -> view:stringview_wtf8
+```
+Obtain a view on a string's contents as WTF-8.  The stringview can then
+be used to interpret the string as a byte sequence in the WTF-8
+encoding.
+
+```
+(stringview_wtf8.advance view:stringview_wtf8 pos:i32 bytes:i32)
+  -> next_pos:i32
+```
+Starting at offset *`pos`* into the WTF-8 encoding of *`view`*, return
+the highest offset that is not greater than *`pos` + `bytes`*.
+
+If *`pos`* is greater than the WTF-8 byte length of *`view`*, it is
+as if it were instead given as the byte length.  If *`pos`* is less than
+the byte length but does not indicate the byte offset of the start of a
+codepoint, it is advanced to the next codepoint (or the end of the
+string, for the last codepoint).  Collectively these transformations are
+the "WTF-8 position treatment".
+
+If the mathematical value of *`next_pos`* would be greater than
+2<sup>31</sup>, trap.  (Future extensions of the `stringref` proposal
+along the lines of the [memory64
+proposal](https://github.com/WebAssembly/memory64/blob/main/proposals/memory64/Overview.md)
+may allow for 64-bit variants of the position-using instructions, which
+could relax this restriction.)
+
+```
+policy ::= 'utf8' | 'wtf8' | 'replace'
+(stringview_wtf8.encode $memory $policy view:stringview_wtf8 ptr:address pos:i32 bytes:i32)
+  -> next_pos:i32, bytes:i32
+```
+Write a subsequence of the WTF-8 encoding of *`view`* to memory at
+*`ptr`*, starting at the WTF-8 offset *`pos`*, writing no more than
+*`bytes`* bytes.  No NUL byte is written.  Return the WTF-8 offset of
+the next characters to encode, along with the number of bytes written.
+
+*`pos`* receives the "WTF-8 position treatment", as for
+`stringview_wtf8.advance`.
+
+If the mathematical value of *`next_pos`* would be greater than
+2<sup>31</sup>, trap.  (Future extensions of the `stringref` proposal
+along the lines of the [memory64
+proposal](https://github.com/WebAssembly/memory64/blob/main/proposals/memory64/Overview.md)
+may allow for 64-bit variants of the position-using instructions, which
+could relax this restriction.)
+
+If an isolated surrogate is seen, the behavior determines on the
+*`$policy`* immediate.  For `utf8`, trap.  For `wtf8`, the surrogate is
+encoded as per WTF-8.  For `replace`, `U+FFFD` is encoded instead.
+
+```
+(stringview_wtf8.slice view:stringview_wtf8 start:i32 end:i32)
+  -> str:stringref
+```
+Return a substring of *`view`*, for the WTF-8 bytes starting at offset
+*`start`* and not greater than *`end`*.  *`start`* and *`end`* receive
+the "WTF-8 position treatment", as for `stringview_wtf8.advance`.
+
+### `stringview_wtf16`
+
+```
+(string.as_wtf16 str:stringref)
+  -> view:stringview_wtf16
+```
+Obtain a view on a string's contents as WTF-16.  The stringview can then
+be used to interpret the string as a sequence of 16-bit code units in
+the WTF-16 encoding.
+
+```
+(stringview_wtf16.length view:stringview_wtf16)
+  -> length:i32
+```
+Return the total number of 16-bit code units necessary to represent
+*`view`* in the WTF-16 encoding.
+
+```
+(stringview_wtf16.get_codeunit view:stringview_wtf16 pos:i32)
+  -> codeunit:i32
+```
+Return the 16-bit code unit at offset *`pos`* in the WTF-16 encoding of
+*`view`*.  If *`pos`* is greater than or equal to the WTF-16 length of
+*`view`*, trap.
+
+```
+(stringview_wtf16.encode $memory view:stringview_wtf16 ptr:address pos:i32 len:i32)
+```
+Write a subsequence of the WTF-16 encoding of *`view`* to memory at
+*`ptr`*, starting at the WTF-16 offset *`pos`*, writing no more than
+*`len`* 16-bit code units.  If *`ptr`* is not two-byte aligned, trap.
+
+If *`pos`* is greater than the number of WTF-16 code units in *`view`*,
+it is as if it were instead given as the code unit length.  This
+transformation is the "WTF-16 position treatment".
+
+```
+(stringview_wtf16.slice view:stringview_wtf16 start:i32 end:i32)
+  -> str:stringref
+```
+Return a substring of *`view`*, for the WTF-16 code units starting at offset
+*`start`* and not greater than *`end`*.  *`start`* and *`end`* receive
+the "WTF-16 position treatment", as for `stringview_wtf16.encode`.
+
+### `stringview_iter`
+
+```
+(string.as_iter str:stringref)
+  -> view:stringview_iter
+```
+Obtain a view on a string's contents as an iterator over the codepoints
+in *`str`*, initially positioned at the beginning of the string.  The
+stringview can then be used to iterate over the codepoints of the
+string.
+
+```
+(stringview_iter.cur view:stringview_iter)
+  -> codepoint:i32
+```
+Return the codepoint currently pointed to by *`view`*, or -1 if the
+iterator is at the end of the string.
+
+```
+(stringview_iter.advance view:stringview_iter codepoints:i32)
+  -> codepoints:i32
+```
+Advance the iterator *`view`* by up to *`codepoints`* codepoints.
+Return the number of codepoints that were actually consumed.
+
+```
+(stringview_iter.rewind view:stringview_iter codepoints:i32)
+  -> codepoints:i32
+```
+Rewind the iterator *`view`* by up to *`codepoints`* codepoints.
+Return the number of codepoints that were actually consumed.
+
+```
+(stringview_iter.slice view:stringview_iter codepoints:i32)
+  -> str:stringref
+```
+Return a substring of *`view`*, starting at the current position of
+*`view`* and continuing for at most *`codepoints`* codepoints.
 
 ## Examples
 
@@ -569,10 +626,9 @@ rather it just deals in WTF-16, as most source languages that expose
 ```wasm
 (func $codepoint-length (param $str stringref) (result i32)
   local.get $str
-  i32.const 0         ;; initial wtf8 offset: beginning of string
+  string.as_iter      ;; Get iterator view
   i32.const -1        ;; advance by all codepoints
-  string.advance_wtf8 ;; push new wtf8 offset, codepoints
-  return)             ;; just return codepoints
+  stringview_iter.advance) ;; return number of codepoints advanced
 ```
 
 ### String literals
@@ -585,80 +641,131 @@ rather it just deals in WTF-16, as most source languages that expose
 
 (func $is-cowboy (param $str stringref) (result i32)
   local.get $str
-  i32.const 0
   call $howdy
-  i32.const 0
-  i32.const -1
-  string.eq_wtf8)
+  string.eq)
 ```
 
-Having to choose the encoding-specific variant of `string.eq` is a bit
-funny in this case where we actually don't care about the encodings.
+### Return the first codepoints of a string, as a stringref
+
+```wasm
+(func $prefix (param $str stringref) (param $codepoints i32)
+              (result stringref)
+  local.get $str
+  string.as_iter
+  local.get $codepoints
+  stringview_iter.slice)
+```
+
+### Return a slice of WTF-16 code units of a string, as a stringref
+
+```wasm
+(func $slice (param $str stringref)
+             (param $offset i32) (param $codeunits i32)
+             (result stringref)
+  local.get $str
+  string.as_wtf16
+  local.get $offset
+  local.get $codeunits
+  stringview_wtf16.slice)
+```
 
 ### Suffix, prefix comparisons
 
+There are a few ways to compare against a substring, but the easiest is
+probably to slice the string, which is something you can do only with
+respect to a particular encoding and view.  Given that we're comparing
+against known strings, we know how long of a slice to take.
+
 ```wasm
 (func starts-with-hey? (param $str stringref) (result i32)
-  global.get $hey
-  i32.const 0
   local.get $str
+  string.as_wtf8
   i32.const 0
   i32.const 3
-  string.eq_wtf8)
+  stringview_wtf8.slice
+  global.get $hey
+  string.eq)
 
 (func ends-with-howdy?/wtf8 (param $str stringref) (result i32)
-  string.const "Howdy"
-  i32.const 0
-  local.get $str
+  (local $wtf8 stringview_wtf8)
 
-  ;; Get wtf-8 offset 5 codepoints before end of $str:
   local.get $str
-  ;; First get wtf-8 offset of end of $str...
-  local.get $str
+  string.as_wtf8
+  local.set $wtf8
+
+  local.get $wtf8
+  local.get $wtf8
+  ;; Get wtf-8 offset of end
   i32.const 0
   i32.const -1
-  string.advance_wtf8
-  drop
-  ;; ...then rewind by 5 codepoints.
-  i32.const 5
-  string.rewind_wtf8
-  drop
-
-  ;; Limit comparison to 5 codepoints.
-  i32.const 5
-  string.eq_wtf8)
-
-(func ends-with-howdy?/wtf16 (param $str stringref) (result i32)
-  (local $len i32)
-
-  string.const "Howdy"
-  i32.const 0
-  local.get $str
-
-  ;; Get position 5 code units before end of $str, knowing that "Howdy"
-  ;; has 5 WTF-16 code units.
-  local.get $str
-  ;; First get cursor at end of $str...
-  string.end_wtf16 $str
-  ;; If position less than 5, it's not equal.
-  local.tee $len
-  i32.const 5
-  (if l32.lt (then (i32.const 0) return))
-
-  local.get $len
+  stringview_wtf8.advance
+  ;; Subtract 5.  Given WTF-8 position treatment, OK to wrap or 
+  ;; not be on codepoint boundary.
   i32.const 5
   i32.sub
+  ;; Slice until end.  If string ends with "howdy", these will be
+  ;; 5 1-byte codepoints.
+  i32.const -1
+  stringview_wtf8.slice
 
-  ;; Limit comparison to 5 code units.
+  string.const "Howdy"
+  string.eq)
+
+;; WTF-16 flavor is similar.
+(func ends-with-howdy?/wtf16 (param $str stringref) (result i32)
+  (local $wtf16 stringview_wtf16)
+
+  local.get $str
+  string.as_wtf16
+  local.set $wtf16
+
+  ;; Slice last 5 code units.
+  local.get $wtf16
+  local.get $wtf16
+  stringview_wtf16.length
   i32.const 5
-  string.eq_wtf16)
+  i32.sub
+  i32.const -1
+  stringview_wtf16.slice
+
+  string.const "Howdy"
+  string.eq)
+
+;; Finally, a version with the iterator API.
+(func ends-with-howdy?/iter (param $str stringref) (result i32)
+  (local $iter stringview_iter)
+
+  local.get $str
+  string.as_iter
+  local.set $iter
+
+  ;; Advance to end.
+  local.get $iter
+  i32.const -1
+  stringview_iter.advance
+
+  ;; Rewind by 5.
+  local.get $iter
+  i32.const 5
+  stringview_iter.rewind
+
+  ;; Slice.
+  local.get $iter
+  i32.const 5
+  stringview_iter.slice
+
+  ;; Compare.
+  string.const "Howdy"
+  string.eq)
 ```
 
 Which version of `ends-with-howdy?` will a source language produce?
-Neither is clearly better.  Probably source language that process
-strings in terms of codepoints will produce the WTF-8 version whereas
-those that process strings in terms of 16-bit code units will compile to
-the WTF-16 version.
+They are essentially equivalent in this use case of comparing against a
+static string, but in the general case, a source language that process
+strings in terms of codepoints would probably use the iterator,
+languages that treat strings as UTF-8 sequences would produce the WTF-8
+version whereas those that process strings in terms of 16-bit code units
+will compile to the WTF-16 version.
 
 ### Store a `stringref` without copying
 
@@ -687,8 +794,6 @@ the WTF-16 version.
   (local $len i32)
   (local $ptr i32)
   local.get $str
-  i32.const 0
-  i32.const -1
   string.measure_utf8
   local.set $len
 
@@ -707,12 +812,11 @@ the WTF-16 version.
   local.set $ptr
 
   local.get $str
-  i32.const 0
   local.get $ptr
-  local.get $len
-  string.encode_wtf8               ;; push number of bytes written
+  string.encode_wtf8
 
   local.get $ptr
+  local.get $len
   i32.add
   i32.const 0
   i32.store8                       ;; write NUL
@@ -769,11 +873,16 @@ WTF-16 in linear memory, for longer strings.
 (func $have-code-unit (param $codeunit i32))
 
 (func $process-string (param $str stringref)
+  (local $wtf16 stringview_wtf16)
   (local $cur i32)
   (local $len i32)
 
   local.get $str
-  string.end_wtf16
+  string.as_wtf16
+  local.set $wtf16
+
+  local.get $wtf16
+  stringview_wtf16.length
   local.set $len
 
   block $done
@@ -783,9 +892,9 @@ WTF-16 in linear memory, for longer strings.
       i32.ge
       br_if $done
 
-      local.get $str
+      local.get $wtf16
       local.get $cur
-      string.get_wtf16
+      stringview_wtf16.get_codeunit
       call $have-code-unit
 
       i32.const 1
@@ -805,14 +914,17 @@ WTF-8 in memory, for longer strings.
 (func $have-codepoint (param $codepoint i32))
 
 (func $process-string (param $str stringref)
-  (local $cur i32)
+  (local $iter stringview_iter)
   (local $ch i32)
+
+  local.get $str
+  string.as_iter
+  local.set $iter
 
   block $done
     loop $loop
-      local.get $str
-      local.get $cur
-      string.get_wtf8
+      local.get $iter
+      stringview_iter.cur
       local.tee $ch
 
       i32.const -1
@@ -822,14 +934,22 @@ WTF-8 in memory, for longer strings.
       local.get $ch
       call $have-codepoint
 
-      local.get $str
-      local.get $cur
+      local.get $iter
       i32.const 1
       string.advance_wtf8
       drop
-      local.set $cur
     end
   end)
+```
+
+### Concatenate two strings
+
+```wasm
+(func $append (param $a stringref) (param $b stringref)
+              (result stringref)
+  local.get $a
+  local.get $b
+  string.concat)
 ```
 
 ## FAQ
