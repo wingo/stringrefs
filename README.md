@@ -423,7 +423,7 @@ sequence.  Return 0 otherwise.
 ```
 (string.is_usv_sequence str:stringref)
   -> bool:i32
-``
+```
 Return 1 if the string *`str`* is a sequence of unicode scalar values,
 and 0 otherwise.  A 0 result indicates that *`str`* contains isolated
 surrogates.
