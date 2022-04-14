@@ -187,7 +187,7 @@ GC-managed array) as UTF-8, WTF-8, or WTF-16, depending on the source
 language's needs.  For example Java usually wants to treat strings as
 WTF-16 code unit sequences, so Java would encode to WTF-16.  This
 proposal provides facilities for measuring how many bytes an encoding
-would take, and actually doing the encoding.
+would take, and for actually doing the encoding.
 
 As a possibly post-MVP feature we also would also like to provide the
 ability to get a WTF-8 or WTF-16 "view" on a string, which should
@@ -761,11 +761,22 @@ against known strings, we know how long of a slice to take.
 
 Which version of `ends-with-howdy?` will a source language produce?
 They are essentially equivalent in this use case of comparing against a
-static string, but in the general case, a source language that process
+static string, but in the general case, a source language that processes
 strings in terms of codepoints would probably use the iterator,
 languages that treat strings as UTF-8 sequences would produce the WTF-8
 version whereas those that process strings in terms of 16-bit code units
 will compile to the WTF-16 version.
+
+One could instead do a character-by-character comparison, to avoid
+creating the slice.
+
+Stepping back a bit, prefix and suffix checks are examples of operations
+for which the stringref proposal should facilitate high-performance
+implementations.  The primary strategy of the stringref proposal is to
+allow any such operation to be build in terms of its primitives.
+However if there are important compound operations (e.g. prefix/suffix
+checks) that can be sped up with a dedicated instruction, we should be
+open to considering adding more instructions.
 
 ### Store a `stringref` without copying
 
