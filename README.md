@@ -380,8 +380,8 @@ The maximum number of bytes returned by these instructions is
 the contents can't be encoded at all (the return value is -1).
 
 ```
-(string.encode_utf8 $memory str:stringref ptr:address)
-(string.encode_wtf8 $memory str:stringref ptr:address)
+wtf8_policy ::= 'utf8' | 'wtf8' | 'replace'
+(string.encode_wtf8 $memory $wtf8_policy str:stringref ptr:address)
 (string.encode_wtf16 $memory str:stringref ptr:address)
 ```
 Encode the contents of the string *`str`* as UTF-8, WTF-8, or WTF-16,
@@ -393,6 +393,13 @@ Note that no `NUL` terminator is ever written.  For
 The maximum number of bytes that can be encoded at once by
 `string.encode` is 2<sup>31</sup>-1.  If an encoding would require more
 bytes, it is as if the codepoints can't be encoded (a trap).
+
+For `string.encode_wtf8`, if an isolated surrogate is seen, the behavior
+determines on the *`$wtf8_policy`* immediate.  For `utf8`, trap.  For
+`wtf8`, the surrogate is encoded as per WTF-8.  For `replace`, `U+FFFD`
+(the replacement character) is encoded instead.  Note that the UTF-8
+encoding of `U+FFFD` is the same length as the encoding of an isolated
+surrogate.
 
 ### Concatenation
 
@@ -465,8 +472,7 @@ may allow for 64-bit variants of the position-using instructions, which
 could relax this restriction.)
 
 ```
-policy ::= 'utf8' | 'wtf8' | 'replace'
-(stringview_wtf8.encode $memory $policy view:stringview_wtf8 ptr:address pos:i32 bytes:i32)
+(stringview_wtf8.encode $memory $wtf8_policy view:stringview_wtf8 ptr:address pos:i32 bytes:i32)
   -> next_pos:i32, bytes:i32
 ```
 Write a subsequence of the WTF-8 encoding of *`view`* to memory at
@@ -485,8 +491,7 @@ may allow for 64-bit variants of the position-using instructions, which
 could relax this restriction.)
 
 If an isolated surrogate is seen, the behavior determines on the
-*`$policy`* immediate.  For `utf8`, trap.  For `wtf8`, the surrogate is
-encoded as per WTF-8.  For `replace`, `U+FFFD` is encoded instead.
+*`$wtf8_policy`* immediate, as in `string.encode_wtf8`.
 
 ```
 (stringview_wtf8.slice view:stringview_wtf8 start:i32 end:i32)
