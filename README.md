@@ -1031,6 +1031,69 @@ such a proposal lands, attempting to pass a stringview across the
 WebAssembly/JS boundary will throw an exception, as was the case for
 `i64` values before the BigInt proposal landed.
 
+### How do we expect Rust to compile to `stringref`?
+
+Generally speaking, for Rust we expect eager copies to UTF-8 data when
+Rust receives a stringref.
+
+Rust represents strings natively as well-formed UTF-8.  Rust string
+processing routines can therefore assume that a UTF-8 string is valid.
+`stringref` strings are WTF-8, though.  So we can expect that for a Rust
+interface that exports a function that takes a `stringref` parameter,
+`wasm-bindgen` would then use a
+[WasmString](https://rustwasm.github.io/wasm-bindgen/reference/types/string.html)
+type, which could be transformed to a `Option<String>` ([which could
+fail or replace with U+FFFD if there are isolated
+surrogates](https://rustwasm.github.io/wasm-bindgen/reference/types/str.html#utf-16-vs-utf-8)).
+This will remove the need for `TextDecoder`/`TextEncoder`.
+
+As an optimization for Rust modules that are designed to work with
+WebAssembly, `WasmString` may expose some methods to avoid an eager
+copy.
+
+### How do we expect JVM and CLR languages to compile to `stringref`?
+
+We expect Java to use `stringref` directly to represent string values.
+
+Java deals with strings as immutable sequences of 16-bit code units.
+Access to individual code units would use `stringview_wtf16`.
+
+Alternately, a Java compiler might instead choose to use
+`stringview_wtf16`, eagerly obtaining wtf16 views on when it receives a
+stringref from the outside world.
+
+### How do we expect Python to compile to `stringref`?
+
+We expect CPython to provide a wrapper around `stringref` for strings
+that come from "outside".  We expect PyPy to use `stringref` directly
+for all strings.
+
+Python strings [are immutable sequences of Unicode code
+points](https://docs.python.org/3/library/stdtypes.html#textseq).  This
+may include surrogates.
+
+CPython's string support is abstract: all codepoint access goes through
+an accessor API.  Therefore when CPython receives a `stringref` on a
+public interface, CPython could store that `stringref` in a table and
+then forward any indexed codepoint access to that `stringref`.
+
+PyPy would instead use `stringref` directly to implement its strings.
+The PyPy maintainer notes that most strings in Python aren't accessd
+using indexed accessors, so probably PyPy would only obtain a view as
+needed.
+
+### How do we expect C++ to compile to `stringref`?
+
+We expect that LLVM will be extended with an additional reference type,
+`stringref`, like the existing `externref` and `funcref` support, along
+with a number of builtins to expose the basic `stringref` operations.
+LLVM will be able to directly expose C++ functions to WebAssembly that
+take `stringref` parameters, removing the need for much Emscripten-side
+code.  However as reference-typed values aren't storable to main memory,
+we expect that unless a C++ program is carefully built to integrate
+reference types, that most `stringref` values will be eagerly converted
+to WTF-8 on the WebAssembly boundary.
+
 ### Is the `stringref` type nullable?
 
 Oh God I guess so.  `ref.null string` it is I guess!!  :sob: :sob: :sob:
