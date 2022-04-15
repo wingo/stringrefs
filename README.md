@@ -1042,7 +1042,7 @@ processing routines can therefore assume that a UTF-8 string is valid.
 interface that exports a function that takes a `stringref` parameter,
 `wasm-bindgen` would then use a
 [WasmString](https://rustwasm.github.io/wasm-bindgen/reference/types/string.html)
-type, which could be transformed to a `Option<String>` ([which could
+type, which could be transformed to an `Option<String>` ([which could
 fail or replace with U+FFFD if there are isolated
 surrogates](https://rustwasm.github.io/wasm-bindgen/reference/types/str.html#utf-16-vs-utf-8)).
 This will remove the need for `TextDecoder`/`TextEncoder`.
