@@ -916,7 +916,8 @@ code units.
 
 Isolated surrogates are rare in JavaScript, but can occur via:
   - Reading invalid UTF-16 from external sources.  However this is not
-    common, as isolated surrogates are not valid UTF-16.
+    common, as most services prefer UTF-8 over UTF-16 as an interchange
+    format.
   - JavaScript code that creates strings whose code units are not valid
     UTF-16.
   - JavaScript code that processes strings in chunks and happens to
