@@ -47,127 +47,42 @@ find good compromises are "minimal" and "viable".
 
 ## Design
 
-### Implications of using JavaScript engine string representations
+### What's a string?
 
-The requirement to re-use JavaScript string representations has a number
-of implications.
+Good question!  It sure would be nice to say that a string is a sequence
+of unicode scalar values.  However, to satisfy the goal of being a good
+compilation target for a wide range of programming languages, as well as
+the goal of good JavaScript interoperability, things are a little more
+complicated.
 
-#### Immutable strings
+Some languages present no problem to this idea that strings are composed
+of unicode scalar values.  Python and Rust are in this category.
 
-JS strings are immutable, so a WebAssembly `stringref` should also be
-immutable.
+Other languages, notably JavaScript and Java, define their strings to be
+sequences of 16-bit code units, for historical reasons.  These code unit
+sequences aren't quite UTF-16, because they can contain isolated
+surrogates, which are prohibited by standard Unicode encoding forms.
+The facility we end up building should be able to represent all Java
+strings, as a compilation target, and also represent all JavaScript
+strings, for good web iteroperability.
 
-#### Polymorphism
+Therefore **we define a string to be a sequence of unicode scalar values
+and isolated surrogates**.  The code units of a Java or JavaScript
+string can be interpreted to encode such a sequence, in the
+[WTF-16](https://simonsapin.github.io/wtf-8/) encoding form.
 
-JS engines typically represent strings in many different ways: strings
-which are "narrow" (in which all code units are in [0,0xFF] and can use
-a fixed-width encoding with only one byte per code unit) or "wide" (two
-bytes per code unit, 1 or 2 code units per codepoint), rope strings or
-not, string slices or not, and external or not.  That's at least 16
-different kinds of strings.
-
-JavaScript can mitigate this polymorphism to a degree via adaptive
-compilation, which can devirtualize based on the kind of strings seen at
-the use site.  However, as of late 2021, no WebAssembly implementation
-has needed to reach to adaptive compilation to get performance; we
-shouldn't design a string interface that requires JIT heroism to be
-fast.
-
-At the same time, when looping over codepoints in a string, you would
-really like your WebAssembly to inline its accessors and iterators.
-Therefore we will provide interfaces that encourage processing string
-contents in chunks, by encoding sequences of codepoints to UTF-8, WTF-8,
-or WTF-16 in memory.
-
-#### JavaScript interoperability and surrogates
-
-The `stringref` proposal has to consider surrogates because we want
-WebAssembly strings to have good interoperation with JavaScript, whose
-strings are composed of 16-bit code units, not codepoints and not
-unicode scalar values.  Additionally we want WebAssembly strings to be a
-good compilation target for Java and C# strings, which have similar
-16-bit code-unit concerns as JavaScript.
-
-The code units of a JavaScript string are usually interpreted as
-UTF-16-encoded unicode scalar values.  Some unicode scalar values are
-encoded as one code unit, and some as two-code-unit surrogate pairs.
-
-When [encoding a JavaScript string to
-UTF-8](https://developer.mozilla.org/en-US/docs/Web/API/TextEncoder/encode),
-logically one first decodes the sequence of code units to a
-[USVString](https://developer.mozilla.org/en-US/docs/Web/API/USVString),
-then encodes those USVs as UTF-8.  However, the first decoding phase can
-fail for isolated surrogates.  In JavaScript, isolated surrogates can
-occur via:
-  - Reading invalid UTF-16 from external sources.  However this is not
-    common, as isolated surrogates are not valid UTF-16.
-  - JavaScript code that creates strings whose code units are not valid
-    UTF-16.
-  - JavaScript code that processes strings in chunks and happens to
-    split a chunk on a surrogate boundary.
-    - This happens most often in JavaScript code that processes strings
-      one code unit at a time.
-  - [JavaScript / DOM keyboard input event
-    handlers](https://github.com/rustwasm/wasm-bindgen/issues/1348#issuecomment-473186426)
-    (though this may be just a bug;
-    [[1]](https://bugzilla.mozilla.org/show_bug.cgi?id=1541349),
-    [[2]](https://bugs.chromium.org/p/chromium/issues/detail?id=949056)).
-
-Isolated surrogates are a source of bugs when programs need to produce
-standard Unicode encodings.  Programs can generally handle them in three
-ways:
- - Some programs replace isolated surrogates with the unicode
-   replacement character (U+FFFD), losing information but allowing
-   processing to proceed.
- - Other programs raise an exception, stopping the program unexpectedly.
- - Others attempt to preserve information by using non-standard
-   encodings.  For example, a program can encode to
-   [CESU-8](https://en.wikipedia.org/wiki/CESU-8) or
-   [WTF-8](https://simonsapin.github.io/wtf-8/) instead of UTF-8.
-
-If we just considered JavaScript, Java, and C#, the most natural thing
-for WebAssembly to do would be to consider strings as being composed of
-16-bit code units.  However this does not map to many other languages.
-
-If we focused just on the kinds of strings that every language supports,
-the best solution would be to say "a `stringref` is a sequence of
-unicode scalar values", because we know that all languages can work with
-such strings.  However this is just a subset of the kind of strings that
-JavaScript, Java, and C# work with, so we can't be this simple.
-
-Also on a practical level, Java and C# and so on will need to be able to
-address UTF-16 code units, not just unicode scalar values.  Sometimes a
-Java compiler will be able to treat a WebAssembly string as a sequence
-of unicode scalar values but that would be a rare case.  Compare this to
-a Scheme implementation, for example, which sees strings only as
-sequences of unicode scalar values and doesn't provide a language-level
-facility for addressing strings in terms of code units, apart from
-explicit "encode this string to UTF-16 in a byte array" interfaces.
-
-We can perhaps find our way out of this mess by noting that the 16-bit
-code units in Java and JavaScript may be interpreted as a sequence of
-codepoints in the [WTF-16](https://simonsapin.github.io/wtf-8/) encoding
--- so not just a sequence of unicode scalar values, but actually any
-codepoint, including isolated surrogates.
-
-Therefore **this proposal defines WebAssembly strings as sequences of
-codepoints, including isolated surrogates**.  Encoding a WebAssembly
-string to UTF-8 may fail, as UTF-8 is a proper Unicode encoding scheme
-that excludes isolated surrogates.  Languages that choose to process
-strings in UTF-8 chunks can decide what to do for these somewhat
-anomalous strings -- use a replacement character, or abort.  This
-proposal also allows encoding to the more general WTF-8 and WTF-16
-encodings, for languages that can handle any codepoint sequence.  For
-16-bit access we only provide the permissive WTF-16 encoding, as source
-languages that want to address strings in terms of 16-bit code units are
-generally tolerant to isolated surrogates.
+This proposal does not require a WebAssembly implementation to use
+WTF-16 to represent its strings internally.  It only requires that the
+implementation be able to represent all codepoint sequences that can be
+encoded with WTF-16, notably codepoint sequences containing isolated
+surrogates.
 
 ### Encodings and views
 
 There is an impedance-matching problem between the way that WebAssembly
 implementations want to represent strings, and the way that source
-languages will want to represent strings.  The stringref API has to do
-the best it can to smooth over these differences.
+languages want to access strings.  The `stringref` API has to do the
+best it can to smooth over these differences.
 
 On the implementation side, some WebAssembly implementations will want
 to represent string contents in the WTF-16 encoding, notably
@@ -189,23 +104,20 @@ WTF-16 code unit sequences, so Java would encode to WTF-16.  This
 proposal provides facilities for measuring how many bytes an encoding
 would take, and for actually doing the encoding.
 
-As a possibly post-MVP feature we also would also like to provide the
-ability to get a WTF-8 or WTF-16 "view" on a string, which should
-provide near-constant-time random access to the bytes of a WTF-8
-encoding of the string, or to the 16-bit code units of a WTF-16 encoding
-of a string.  We also provide a view that allows forward access to the
-codepoints in a string.
+This proposal also includes the ability to get a WTF-8 or WTF-16 "view"
+on a string, which should provide near-constant-time random access to
+the bytes of a WTF-8 encoding of the string, or to the 16-bit code units
+of a WTF-16 encoding of a string.  We also provide a view that allows an
+iterator interface over the codepoints in a string.
 
 An implementation using WTF-8 will have some costs for source languages
-that want WTF-16, and vice versa.  All implementations will have trouble
-with codepoint sequences, as no implementation will represent strings as
-UTF-32 (WTF-32 is not defined, though it could be).
+that want WTF-16, and vice versa.
 
-Getting a view for a WebAssembly's "native" string encoding is likely a
-constant-time operation, and possibly even free.  For example, getting a
-WTF-8 view for an implementation that uses WTF-8 to represent strings
-will be free.  Getting a WTF-16 view on a WTF-8 implementation could
-imply a copy, or possibly the computation of a
+Getting a view for a WebAssembly implementation's "native" string
+encoding is likely a constant-time operation, and possibly even free.
+For example, getting a WTF-8 view for an implementation that uses WTF-8
+to represent strings will be free.  Getting a WTF-16 view on a WTF-8
+implementation could imply a copy, or possibly the computation of a
 [breadcrumbs](https://www.swift.org/blog/utf8-string/#breadcrumbs)
 table.
 
@@ -216,46 +128,29 @@ meaning depends on the string view type: a byte offset for a WTF-8
 string view, a code unit offset for a WTF-16 view, or a codepoint offset
 for a codepoint view.
 
-### Oracle: JS engine C++ API
+### Handling invalid UTF-8
 
-While developing this proposal, we realized that we already had a design
-oracle: `v8.h`.  It is reasonable to think that the C++ interface to a
-JS engine already has the minimal necessary set of interfaces.
- - We can assume that `v8.h` has all the interfaces that Chromium needs,
-   so we expect that the interfaces in `v8.h` are sufficient.
- - V8 wants to minimize API surface and historically has removed API, so
-   we expect V8's interface is close to minimal.
- - C++ interfaces to different JS engines are similar.  We can look at
-   `v8.h` and draw conclusions for any engine.
+WTF-8 and WTF-16 are not interchange formats: they should not be used
+when communicating data over a network, for example.  If a program goes
+to encode a string to UTF-8, and the string contains an isolated
+surrogate, the program can trap, or it can replace the codepoint with
+`U+FFFD` (the replacement character).  The stringref facility provides
+an efficient mechanism for detecting strings which are not valid USV
+sequences.  When encoding data as UTF-8, it allows the programmer to
+specify whether to replace any isolated surrogate or whether to trap.
 
-The [V8 C++ String
-API](https://chromium.googlesource.com/v8/v8/+/refs/heads/main/include/v8-primitive.h#110)
-includes the following procedural interfaces:
-
-  - Create a string from encoded bytes in memory
-    - Supported encodings: `one-byte`, `utf-8`, `utf-16`
-  - Get length of string when encoded as `one-byte`, `utf-8`, `utf-16`
-    - Does not include unicode scalar value count
-  - Predicate on string to identify strings represented using one byte
-    per character (a cheap check) and strings that can be represented
-    using one byte per character (possibly a linear search)
-  - Write encoded bytes to memory
-    - Supported encodings: `one-byte`, `utf-8`, `utf-16`
-    - Options: hint that ropes should be flattened, include `NUL`
-      terminator or not, whether to preserve `NUL` codepoints, whether
-      to replace isolated surrogates with the replacement character or
-      to trap
-  - Support for strings whose characters are in linear memory and which
-    shouldn't be copied ("external strings"); probably not appropriate
-    for WebAssembly
-  - Equality predicate
-  - Concatenate two strings.  Interestingly, `v8.h` has no interface to
-    make a substring (slice).
+For some source languages, defining strings to be sequences of unicode
+scalar values and isolated surrogates is an antifeature: those source
+languages do not require the ability to represent isolated surrogates
+and would prefer to not be given strings with isolated surrogates.  We
+sympathize.  On a boundary where such a program might receive a string
+containing isolated surrogates, the program can check for such strings
+and trap using facilities defined in this proposal.
 
 ### Prior discussions
 
  * The component model subgroup chose to agree that on component
-   boundaries, strings consist of sequences of USVs:
+   boundaries, strings consist of sequences of unicode scalar values:
    https://docs.google.com/presentation/d/1qVbBsDFmremBGVKiOAzRk7svjinNq6LXfJ1DzeFwKtc
    *The CG discussion and decision inform but don't constrain this proposal.*
 
@@ -267,11 +162,11 @@ includes the following procedural interfaces:
 
 ## Proposal
 
-This proposal includes a basic `stringref` facility, and a (possibly
+This proposal consists of a basic `stringref` facility and a (possibly
 post-MVP) `stringview` facility.
 
 The `stringref` facility defines a new reference type, `stringref`.
-Literal stringref values can be embedded in a WebAssembly module, with
+Literal `stringref` values can be embedded in a WebAssembly module, with
 their contents taken from a new section.  WebAssembly programs can also
 create `stringref` values from data encoded in memory or GC arrays in
 the WTF-8 or WTF-16 encodings, and can likewise write `stringref`
@@ -999,74 +894,142 @@ also avoids eager string encoding onto the stack and the need for NUL
 termination, allowing string contents to be written to memory exactly
 where they are needed.
 
+### Why should WebAssembly strings be able to represent isolated surrogates?
+
+The main motivation is to support source languages with WTF-16 strings
+(e.g. Java, Kotlin, C#).  JVM-based and CLR-based languages treat
+strings as sequences of 16-bit code units.  Sometimes programs written
+in e.g. Java will decode these sequences into codepoints encoded as
+WTF-16, but not always.  Many common algorithms can be performed
+directly on the code units, for example prefix matching.  Therefore to
+efficiently support Java and friends when compiled to WebAssembly, we
+need to support this view of strings as sequences of any 16-bit code
+units, without any validity constraints that enforce that surrogates
+always be properly paired.  This is the main reason to support WTF-16
+rather than just UTF-16.
+
+An important secondary reason is interoperability with JavaScript hosts.
+For zero-copy interoperation with JavaScript and DOM facilities, it
+would be good if for `stringref` to have the same semantics as a
+JavaScript string, which like Java is an arbitrary sequence of 16-bit
+code units.
+
+Isolated surrogates are rare in JavaScript, but can occur via:
+  - Reading invalid UTF-16 from external sources.  However this is not
+    common, as most services prefer UTF-8 over UTF-16 as an interchange
+    format.
+  - JavaScript code that creates strings whose code units are not valid
+    UTF-16.
+  - JavaScript code that processes strings in chunks and happens to
+    split a chunk on a surrogate boundary.
+    - This happens most often in JavaScript code that processes strings
+      one code unit at a time.
+  - [JavaScript / DOM keyboard input event
+    handlers](https://github.com/rustwasm/wasm-bindgen/issues/1348#issuecomment-473186426)
+    (though this may be just a bug;
+    [[1]](https://bugzilla.mozilla.org/show_bug.cgi?id=1541349),
+    [[2]](https://bugs.chromium.org/p/chromium/issues/detail?id=949056)).
+
+Therefore we define a `stringref` as an arbitrary sequence of not just
+unicode scalar values, but also isolated surrogates.  Note that this
+definition excludes codepoint sequences containing proper surrogate
+pairs.  This restriction is enforced by construction for the WTF-8 and
+WTF-16 encoding schemes.
+
+### Are stringrefs mutable?
+
+No.  We don't need mutable strings when compiling Java, C#, or Python,
+and we don't need them when interoperating with JavaScript hosts.
+Immutable strings have the benefit that you can hand them to an
+untrusted interface without copying, and you know that interface won't
+be able to use the string to affect any of your own state.
+
+It is not a goal for `stringref` to be the main string representation
+for programming languages that need mutable strings.  Fortunately there
+are fewer and fewer of these languages as time goes on.
+
+### What do existing C++ APIs to JavaScript strings look like?
+
+While developing this proposal, we realized that we might already have a
+design oracle as regards JavaScript integration: `v8.h`.  Perhaps for
+languages that tend to work on strings in linear memory (C++, Rust), we
+can use the C++ interface to a JS engine as an indication of what
+interfaces we might need.
+ - We can assume that `v8.h` has all the interfaces that Chromium needs,
+   so we expect that the interfaces in `v8.h` are sufficient.
+ - V8 wants to minimize API surface and historically has removed API, so
+   we expect V8's interface is close to minimal.
+ - C++ interfaces to different JS engines are similar.  We can look at
+   `v8.h` and draw conclusions for any engine.
+
+The [V8 C++ String
+API](https://chromium.googlesource.com/v8/v8/+/refs/heads/main/include/v8-primitive.h#110)
+includes the following procedural interfaces:
+
+  - Create a string from encoded bytes in memory
+    - Supported encodings: `one-byte`, `utf-8`, `utf-16`
+  - Get length of string when encoded as `one-byte`, `utf-8`, `utf-16`
+    - Does not include unicode scalar value count
+  - Predicate on string to identify strings represented using one byte
+    per character (a cheap check) and strings that can be represented
+    using one byte per character (possibly a linear search)
+  - Write encoded bytes to memory
+    - Supported encodings: `one-byte`, `utf-8`, `utf-16`
+    - Options: hint that ropes should be flattened, include `NUL`
+      terminator or not, whether to preserve `NUL` codepoints, whether
+      to replace isolated surrogates with the replacement character or
+      to trap
+  - Support for strings whose characters are in linear memory and which
+    shouldn't be copied ("external strings"); probably not appropriate
+    for WebAssembly
+  - Equality predicate
+  - Concatenate two strings.  Interestingly, `v8.h` has no interface to
+    make a substring (slice).
+
+We used this set of interfaces as a starting point for the `stringref`
+design.  The need to support WebAssembly implementations that use WTF-8
+to represent strings internally did cause us, however, to separate out
+some functionality into `stringview`.
+
 ### What is the expected implementation on non-browser run-times?
 
 Assuming that the non-browser implementation uses WTF-8 as the native
 string representation, then a `stringref` is a pointer, a length, and a
 reference count.  Some implementations may also want to keep a flag
-indicating whether a string is valid UTF-8.  Most implementations will
-also want to implement a map from UTF-16 position to UTF-8 position via
+indicating whether a string is valid UTF-8.
+
+When creating a `stringview_wtf16` from a `stringref` on a system that
+represents `stringref` as WTF-8, some implementations will eagerly copy
+the string to a WTF-16 encoding.  Others will to implement a map
+from WTF-16 position to WTF-8 position via
 [breadcrumbs](https://www.swift.org/blog/utf8-string/#breadcrumbs).
-UTF-8 position validation is ensuring the cursor is less than or equal
-to the string byte length, and that `(ptr[cursor] & 0xb0) != 0x80`.
-Encoding UTF-8 is just `memcpy`.
 
 ### What's the expected implementation in web browsers?
 
-We expect that web browsers use JS strings as `stringref`.  WTF-16
-access uses the same primitives exposed to JavaScript.  Iterating the
-codepoints of a string using the WTF-8 interfaces might use a small
-per-instance cache that associates the most recent WTF-16 and WTF-8
-offsets for the last-accessed string or strings.
+We expect that web browsers use JS strings as `stringref`.
+
+We expect also that web browsers use JS strings directly as their
+`stringview_wtf16` implementation, given that current web browsers
+represent strings internally as WTF-16 (with some optimizations for
+latin-1 strings).
+
+For `stringview_wtf8`, we expect either an eager copy or breadcrumbs, as
+in the non-browser runtime case.  Some small strings may avoid the
+re-encoding and instead re-encode on the fly.
 
 There is a possibility that some web browsers may eventually switch from
 the one-byte/two-byte representation to WTF-8 with breadcrumbs, which
-would make browsers follow the same strategy as the non-browser case.
+would make those web browsers use the same strategy as the non-browser
+case.
 
-Without a cache, accessing each codepoint in a string via
-`string.get_wtf8` would be quadratic.  Perhaps this proposal should
-specify time complexity bounds for some kinds of string algorithm, for
-example visiting each codepoint in a string.
+### How should stringviews be represented in JavaScript hosts?
 
-### What are the expected performance characteristics of the WTF-8 and WTF-16 interfaces?
-
-We expect that compilers that emit WTF-8 instructions prefer chunks of
-`string.encode_wtf8` over `string.get_wtf8` / `string.advance_wtf8`.
-`string.get_wtf8` / `string.advance_wtf8` will be faster on WebAssembly
-implementations that use WTF-8 internally.
-
-We expect that compilers that emit the WTF-16 interface place more
-importance on `string.get_wtf16`.  Implementations should ensure that
-`string.get_wtf16` runs in near-constant time, even on systems that
-represent strings internally as WTF-8.
-
-### Could abstract the concept of a string position?
-
-The question is, if we see strings as sequences of codepoints that can
-be seeked around in, what if we defined an abstract type for a cursor
-into a string?  Such a cursor could hold onto the string and so avoid
-any need for position validation, and could abstract over the
-differences between implementations that use WTF-8 or WTF-16 internally.
-
-One consideration is that whatever we do, some source languages will
-need WTF-16 codepoint access (`string.get_wtf16`).  This makes abstract
-cursors less attractive because they are not comprehensive.  Abstract
-cursors could replace uses of WTF-8 string positions which are really
-about accessing the codepoints of a string and only incidentally about
-WTF-8.
-
-Defining a string cursor type is tricky though -- would you allow them
-to be stored to globals?  Passed as parameters?  To JavaScript?  How
-would you reference them?  Would they be heap objects with identity, or
-reference types which somehow have no identity?  Could you store them to
-memory?  (Probably not.)  Just using `i32` WTF-8 and WTF-16 offsets does
-solve these issues.
-
-This is probably the biggest open question of this proposal.  See
-https://github.com/wingo/wasm-strings/issues/6,
-https://github.com/wingo/wasm-strings/issues/11,
-https://github.com/wingo/wasm-strings/issues/21, and
-https://github.com/wingo/wasm-strings/issues/24.
+It's possible for a WebAssembly module to define an exported function
+that returns a `stringview_iter`.  This proposal leaves the question of
+the JS API for stringviews to a post-MVP proposal.  We expect that until
+such a proposal lands, attempting to pass a stringview across the
+WebAssembly/JS boundary will throw an exception, as was the case for
+`i64` values before the BigInt proposal landed.
 
 ### Is the `stringref` type nullable?
 
@@ -1101,20 +1064,23 @@ JavaScript is bug-prone.  Using `stringref` would eliminate questions of
 memory ownership, reducing the risk of use-after-free, data corruption,
 write overruns, and privileged data leakage.
 
-### Doesn't the `encode` interface imply some copying overhead?
+### Why might you want to eagerly copy string contents to and from linear memory?
 
-Yes, but this overhead is offset by the inlined code unit processing on
-the WebAssembly side, and somewhat hidden by CPU caches.  (At some point
-we will need to measure this.)
+Some programming languages will be happy to deal with string contents
+via the `stringview` APIs, avoiding copies of string contents to linear
+or GC-managed memory.  Some others will prefer to copy out a WTF-8
+encoding to main memory, because that's how they are used to dealing
+with strings.  This copying has an overhead but for algorithms that
+touch many code units it can be advantageous, as you get to inline the
+per-code-unit processing work rather than calling out to `stringview`
+interfaces.
 
-It's possible to access individual codepoints in a string using the
-WTF-8 interface.  This will be faster on some implementations than
-others.  It's also possible to access individual WTF-16 code units,
-which should be fast on all implementations.
-
-Note however that individual codepoint access isn't quite "raw";
-JavaScript strings, for example, are quite polymorphic, and even in
-non-browser WTF-8 implementations there will still be ropes and slices.
+As the `stringview` interfaces may exhibit polymorphism, they may have
+some per-operation overheads.  For example, a `stringview_wtf16` will be
+cheap to create in JavaScript, but accessing the code units still has to
+dispatch over whether the string is a rope or a slice, whether the
+codepoints are one-byte or two-byte, and so on.  Even in non-browser
+WTF-8 implementations there will still be ropes and slices.
 
 ### Why not just use `externref` and imported functions?
 
@@ -1161,10 +1127,11 @@ faster than `externref`+imports:
     implemented in C++/Rust/etc more directly, resulting in more
     predictable performance than e.g. an encoder implemented in JS (for
     web embeddings).
- 4. Reading string contents via
-    `string.encode_wtf8`-then-process-inline is likely faster than
-    calling out to JavaScript to read code units one at a time.
-    WebAssembly-to-JavaScript calls are cheap but not free.
+ 4. Reading string contents, either via
+    `string.encode_wtf8`-then-process-inline or via `stringview_wtf16`,
+    is likely faster than calling out to JavaScript to read code units
+    one at a time.  WebAssembly-to-JavaScript calls are cheap but not
+    free.
 
 On the other hand, it's true that JS run-time routines can use adaptive
 JIT techniques to possibly inline representation-specific accessors.
@@ -1222,10 +1189,11 @@ concrete adapter function specialized to the data representations used
 by the caller and the callee.  The instruction set in this proposal can
 be used to implement the adapter function for passing a `stringref` as a
 string; assuming that the adapter function is generated in such a way
-that it has access to the target memory, `string.encode` can implement
-the copy and validation at the same time.  `string.new` would be the
-implementation of getting a `stringref` from an interface-typed string
-value.
+that it has access to the target memory, `string.encode_wtf8` can
+implement the copy and validation at the same time.  `string.new_wtf8`
+would be the implementation of getting a `stringref` from an
+interface-typed string value, again assuming UTF-8 encoding for these
+values.
 
 Of course, because a `stringref` is immutable, whether it is copied or
 not on a component boundary or during a call to an interface-typed
@@ -1235,5 +1203,4 @@ accounting reasons.  Others will apply a zero-copy strategy when
 possible, for example when both the caller and the callee of an
 interface are implemented with `stringref`.  In the zero-copy case,
 however, hosts have to eagerly verify that the string is a valid USV
-sequence; see
-[isUSVString](https://github.com/guybedford/proposal-is-usv-string).
+sequence.  For this they would use `string.is_usv_sequence`.
