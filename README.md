@@ -999,7 +999,7 @@ indicating whether a string is valid UTF-8.
 
 When creating a `stringview_wtf16` from a `stringref` on a system that
 represents `stringref` as WTF-8, some implementations will eagerly copy
-our the string to a WTF-16 encoding.  Others will to implement a map
+the string to a WTF-16 encoding.  Others will to implement a map
 from WTF-16 position to WTF-8 position via
 [breadcrumbs](https://www.swift.org/blog/utf8-string/#breadcrumbs).
 
