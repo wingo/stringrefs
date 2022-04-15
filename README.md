@@ -1059,8 +1059,8 @@ Java deals with strings as immutable sequences of 16-bit code units.
 Access to individual code units would use `stringview_wtf16`.
 
 Alternately, a Java compiler might instead choose to use
-`stringview_wtf16`, eagerly obtaining wtf16 views on when it receives a
-stringref from the outside world.
+`stringview_wtf16`, eagerly obtaining WTF-16 views when it receives a
+`stringref` from the outside world.
 
 ### How do we expect Python to compile to `stringref`?
 
@@ -1078,7 +1078,7 @@ public interface, CPython could store that `stringref` in a table and
 then forward any indexed codepoint access to that `stringref`.
 
 PyPy would instead use `stringref` directly to implement its strings.
-The PyPy maintainer notes that most strings in Python aren't accessd
+The PyPy maintainer notes that most strings in Python aren't accessed
 using indexed accessors, so probably PyPy would only obtain a view as
 needed.
 
