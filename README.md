@@ -994,14 +994,22 @@ some functionality into `stringview`.
 ### What is the expected implementation on non-browser run-times?
 
 Assuming that the non-browser implementation uses WTF-8 as the native
-string representation, then a `stringref` is a pointer, a length, and a
-reference count.  Some implementations may also want to keep a flag
-indicating whether a string is valid UTF-8.
+string representation, then a `stringref` could be just a pointer, a
+length, and a reference count.  Some implementations may also want to
+keep a flag indicating whether a string is valid UTF-8.
+
+Generally speaking, WebAssembly doesn't specify the time or space
+complexity of its operations.  In that regard, an implementation is free
+to implement e.g. `string.concat` via an eager copy.  In practice
+however we expect the same dynamics that lead JavaScript implementations
+to natively support ropes and slices would hold with non-browser
+run-times.  These implementations would also have their own heuristics
+for when to flatten strings.
 
 When creating a `stringview_wtf16` from a `stringref` on a system that
-represents `stringref` as WTF-8, some implementations will eagerly copy
-the string to a WTF-16 encoding.  Others will to implement a map
-from WTF-16 position to WTF-8 position via
+represents `stringref` as WTF-8, we expect that some implementations
+will eagerly copy the string to a WTF-16 encoding.  Others will to
+implement a map from WTF-16 position to WTF-8 position via
 [breadcrumbs](https://www.swift.org/blog/utf8-string/#breadcrumbs).
 
 ### What's the expected implementation in web browsers?
